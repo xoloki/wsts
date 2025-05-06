@@ -219,8 +219,14 @@ impl Party {
 
     /// Sign `msg` with this party's share of the group private key, using the set of `signers` and corresponding `nonces`
     pub fn sign(&self, msg: &[u8], signers: &[u32], nonces: &[PublicNonce]) -> SignatureShare {
-        let (_, aggregate_nonce) = compute::intermediate(msg, signers, nonces);
-        let mut z = &self.nonce.d + &self.nonce.e * compute::binding(&self.id(), nonces, msg);
+        let (_, aggregate_nonce) = compute::intermediate(msg, self.group_key, signers, nonces);
+        let commitment_list: Vec<(Scalar, PublicNonce)> = signers
+            .iter()
+            .zip(nonces)
+            .map(|(id, nonce)| (Scalar::from(*id), nonce.clone()))
+            .collect();
+        let mut z = &self.nonce.d
+            + &self.nonce.e * compute::binding(&self.id(), self.group_key, &commitment_list, msg);
         z += compute::challenge(&self.group_key, &aggregate_nonce, msg)
             * &self.private_key
             * compute::lambda(self.id, signers);
@@ -255,7 +261,13 @@ impl Party {
         aggregate_nonce: &Point,
         tweak: Option<Scalar>,
     ) -> SignatureShare {
-        let mut r = &self.nonce.d + &self.nonce.e * compute::binding(&self.id(), nonces, msg);
+        let commitment_list: Vec<(Scalar, PublicNonce)> = signers
+            .iter()
+            .zip(nonces)
+            .map(|(id, nonce)| (Scalar::from(*id), nonce.clone()))
+            .collect();
+        let mut r = &self.nonce.d
+            + &self.nonce.e * compute::binding(&self.id(), self.group_key, &commitment_list, msg);
         if tweak.is_some() && !aggregate_nonce.has_even_y() {
             r = -r;
         }
@@ -327,7 +339,6 @@ impl Aggregator {
         }
 
         let signers: Vec<u32> = sig_shares.iter().map(|ss| ss.id).collect();
-        let (_Rs, R) = compute::intermediate(msg, &signers, nonces);
         let mut z = Scalar::zero();
         let mut cx_sign = Scalar::one();
         let aggregate_public_key = self.poly[0];
@@ -341,6 +352,7 @@ impl Aggregator {
             }
             _ => aggregate_public_key,
         };
+        let (_Rs, R) = compute::intermediate(msg, aggregate_public_key, &signers, nonces);
         let c = compute::challenge(&tweaked_public_key, &R, msg);
 
         for sig_share in sig_shares {
@@ -374,7 +386,6 @@ impl Aggregator {
         }
 
         let signers: Vec<u32> = sig_shares.iter().map(|ss| ss.id).collect();
-        let (Rs, R) = compute::intermediate(msg, &signers, nonces);
         let mut bad_party_keys = Vec::new();
         let mut bad_party_sigs = Vec::new();
         let aggregate_public_key = self.poly[0];
@@ -384,6 +395,7 @@ impl Aggregator {
             }
             _ => aggregate_public_key,
         };
+        let (Rs, R) = compute::intermediate(msg, aggregate_public_key, &signers, nonces);
         let c = compute::challenge(&tweaked_public_key, &R, msg);
         let mut r_sign = Scalar::one();
         let mut cx_sign = Scalar::one();
@@ -689,12 +701,13 @@ impl traits::Signer for Signer {
     }
 
     fn compute_intermediate(
+        &self,
         msg: &[u8],
         _signer_ids: &[u32],
         key_ids: &[u32],
         nonces: &[PublicNonce],
     ) -> (Vec<Point>, Point) {
-        compute::intermediate(msg, key_ids, nonces)
+        compute::intermediate(msg, self.group_key, key_ids, nonces)
     }
 
     fn validate_party_id(
@@ -715,7 +728,8 @@ impl traits::Signer for Signer {
         key_ids: &[u32],
         nonces: &[PublicNonce],
     ) -> Vec<SignatureShare> {
-        let aggregate_nonce = compute::aggregate_nonce(msg, key_ids, nonces).unwrap();
+        let aggregate_nonce =
+            compute::aggregate_nonce(msg, self.group_key, key_ids, nonces).unwrap();
         self.parties
             .iter()
             .map(|p| p.sign_precomputed(msg, key_ids, nonces, &aggregate_nonce))
@@ -730,7 +744,8 @@ impl traits::Signer for Signer {
         nonces: &[PublicNonce],
         merkle_root: Option<[u8; 32]>,
     ) -> Vec<SignatureShare> {
-        let aggregate_nonce = compute::aggregate_nonce(msg, key_ids, nonces).unwrap();
+        let aggregate_nonce =
+            compute::aggregate_nonce(msg, self.group_key, key_ids, nonces).unwrap();
         let tweak = compute::tweak(&self.parties[0].group_key, merkle_root);
         self.parties
             .iter()
@@ -747,7 +762,8 @@ impl traits::Signer for Signer {
         key_ids: &[u32],
         nonces: &[PublicNonce],
     ) -> Vec<SignatureShare> {
-        let aggregate_nonce = compute::aggregate_nonce(msg, key_ids, nonces).unwrap();
+        let aggregate_nonce =
+            compute::aggregate_nonce(msg, self.group_key, key_ids, nonces).unwrap();
         self.parties
             .iter()
             .map(|p| {
