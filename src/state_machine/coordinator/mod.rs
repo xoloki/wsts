@@ -114,6 +114,9 @@ pub enum Error {
     #[error("A packet had an invalid signature")]
     /// A packet had an invalid signature
     InvalidPacketSignature,
+    #[error("No public shares for signer {0}")]
+    /// No public shares for the signer who sent private shares
+    NoPublicSharesForSigner(u32),
     #[error("A curve point error {0}")]
     /// A curve point error
     Point(#[from] PointError),
