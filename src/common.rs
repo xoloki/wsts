@@ -274,11 +274,12 @@ impl TupleProof {
     ) -> Self {
         let r = Scalar::random(rng);
         let R = r * G;
-        let s = Self::challenge(A, B, K, &R);
+        let rB = r * B;
+        let s = Self::challenge(A, B, K, &R, &rB);
 
         Self {
             R,
-            rB: r * B,
+            rB,
             z: r + a * s,
         }
     }
@@ -286,13 +287,13 @@ impl TupleProof {
     #[allow(non_snake_case)]
     /// Verify the proof using the transcript and public parameters
     pub fn verify(&self, A: &Point, B: &Point, K: &Point) -> bool {
-        let s = Self::challenge(A, B, K, &self.R);
+        let s = Self::challenge(A, B, K, &self.R, &self.rB);
 
         (self.z * G == self.R + s * A) && (self.z * B == self.rB + s * K)
     }
 
     #[allow(non_snake_case)]
-    fn challenge(A: &Point, B: &Point, K: &Point, R: &Point) -> Scalar {
+    fn challenge(A: &Point, B: &Point, K: &Point, R: &Point, rB: &Point) -> Scalar {
         let mut hasher = Sha256::new();
 
         hasher.update("TUPLE_PROOF/".as_bytes());
@@ -300,6 +301,7 @@ impl TupleProof {
         hasher.update(B.compress().as_bytes());
         hasher.update(K.compress().as_bytes());
         hasher.update(R.compress().as_bytes());
+        hasher.update(rB.compress().as_bytes());
 
         hash_to_scalar(&mut hasher)
     }
@@ -467,6 +469,18 @@ pub mod test {
         let tuple_proof = TupleProof::new(&a, &A, &B, &K, &mut rng);
         assert!(!tuple_proof.verify(&A, &B, &K));
         assert!(!tuple_proof.verify(&B, &A, &K));
+
+        // try forging a proof by setting rB = z * B - s * K for a random K, with z from a real proof
+        let k = Scalar::random(&mut rng);
+        let K_fake = k * G;
+        let r = Scalar::random(&mut rng);
+        let R = r * G;
+        let rB = r * B;
+        let s = TupleProof::challenge(&A, &B, &K_fake, &R, &rB);
+        let z = r + a * s;
+        let rB_fake = z * B - s * K_fake;
+        let forged_proof = TupleProof { R, rB: rB_fake, z };
+        assert!(!forged_proof.verify(&A, &B, &K_fake));
     }
 
     #[test]
