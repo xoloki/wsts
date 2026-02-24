@@ -10,6 +10,7 @@ use crate::{
         point::{Point, G},
         scalar::Scalar,
     },
+    errors::AggregatorError,
     net::{
         DkgBegin, DkgEnd, DkgEndBegin, DkgFailure, DkgPrivateBegin, DkgPrivateShares,
         DkgPublicShares, DkgStatus, Message, NonceRequest, NonceResponse, Packet, Signable,
@@ -619,7 +620,11 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
         // this will be used to report signers who were malicious in this DKG round, as opposed to
         // self.malicious_dkg_signer_ids which contains all DKG signers who were ever malicious
         let mut malicious_signers = HashSet::new();
-        let threshold: usize = self.config.threshold.try_into().unwrap();
+        let threshold: usize = self
+            .config
+            .threshold
+            .try_into()
+            .map_err(Error::TryFromInt)?;
         if self.dkg_wait_signer_ids.is_empty() {
             // if there are any errors, mark signers malicious and retry
             for (signer_id, dkg_end) in &self.dkg_end_messages {
@@ -817,11 +822,31 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                     self.party_polynomials.insert(*party_id, comm.clone());
                 }
             } else {
-                warn!(
+                error!(
                     signer_id = %signer_id,
                     "No DkgPublicShares from signer who sent DkgPrivateShares"
                 );
+                return Err(Error::NoPublicSharesForSigner(*signer_id));
             }
+        }
+
+        // Final sanity check on PolyComitments
+        let threshold: usize = self
+            .config
+            .threshold
+            .try_into()
+            .map_err(Error::TryFromInt)?;
+        let mut bad_ids = Vec::new();
+        for (party_id, comm) in &self.party_polynomials {
+            if !check_public_shares(comm, threshold, &self.current_dkg_id.to_be_bytes()) {
+                bad_ids.push(compute::id(*party_id));
+            }
+        }
+
+        if !bad_ids.is_empty() {
+            return Err(Error::Aggregator(AggregatorError::BadPolyCommitments(
+                bad_ids,
+            )));
         }
 
         // Calculate the aggregate public key
@@ -832,10 +857,21 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 if let Some(dkg_public_shares) = self.dkg_public_shares.get(signer_id) {
                     dkg_public_shares.comms.clone()
                 } else {
+                    warn!(
+                        signer_id = %signer_id,
+                        "No DkgPublicShares from signer who sent DkgEnd"
+                    );
                     vec![]
                 }
             })
-            .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
+            .fold(Point::default(), |s, (_, comm)| {
+                if let Some(p) = comm.poly.get(0) {
+                    s + p
+                } else {
+                    warn!("Empty polynomial when computing aggregate public key");
+                    s
+                }
+            });
 
         info!("Aggregate public key: {key}");
         self.aggregate_public_key = Some(key);
