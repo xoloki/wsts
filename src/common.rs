@@ -35,7 +35,7 @@ pub struct PolyCommitment {
 impl PolyCommitment {
     /// Verify the wrapped schnorr ID
     pub fn verify(&self, ctx: &[u8]) -> bool {
-        self.id.verify(&self.poly[0], ctx)
+        self.poly.len() > 0 && self.id.verify(&self.poly[0], ctx)
     }
 }
 
@@ -319,7 +319,7 @@ pub fn validate_key_id(key_id: u32, num_keys: u32) -> bool {
 
 /// Check that the PolyCommitment is properly signed and has the correct degree polynomial
 pub fn check_public_shares(poly_comm: &PolyCommitment, threshold: usize, ctx: &[u8]) -> bool {
-    poly_comm.verify(ctx) && poly_comm.poly.len() == threshold
+    poly_comm.poly.len() == threshold && poly_comm.verify(ctx)
 }
 
 /// An implementation of p256k1's MultiMult trait that allows fast checking of DKG private shares
@@ -431,7 +431,7 @@ pub mod test_helpers {
 /// Test module for common functionality
 pub mod test {
     use super::*;
-    use crate::util::create_rng;
+    use crate::{compute, util::create_rng, vss::VSS};
 
     use rand::prelude::*;
     use rand_chacha::ChaCha8Rng;
@@ -505,5 +505,36 @@ pub mod test {
             assert_ne!(scalar, nonce.d);
             assert_ne!(scalar, nonce.e);
         }
+    }
+
+    #[test]
+    fn can_check_public_shares() {
+        let mut rng = create_rng();
+        let threshold = 10;
+        let signer_id = 1u32;
+        let ctx = [0u8; 32];
+        let poly = VSS::random_poly(threshold - 1, &mut rng);
+        let comm = PolyCommitment {
+            id: ID::new(&compute::id(signer_id), &poly.data()[0], &ctx, &mut rng),
+            poly: (0..poly.data().len())
+                .map(|i| &poly.data()[i] * G)
+                .collect(),
+        };
+
+        assert!(check_public_shares(
+            &comm,
+            threshold.try_into().unwrap(),
+            &ctx
+        ));
+        let comm = PolyCommitment {
+            poly: Vec::new(),
+            ..comm
+        };
+        assert!(!check_public_shares(
+            &comm,
+            threshold.try_into().unwrap(),
+            &ctx
+        ));
+        assert!(!comm.verify(&ctx));
     }
 }
