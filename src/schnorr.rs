@@ -12,14 +12,22 @@ use crate::{
 
 #[allow(non_snake_case)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+/// A general schnorr proof
+pub struct Proof {
+    /// The commitment to the proof randomness
+    pub R: Point,
+    /// The response to the challenge
+    pub s: Scalar,
+}
+
+#[allow(non_snake_case)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 /// ID type which encapsulates the ID and a schnorr proof of ownership of the polynomial
 pub struct ID {
     /// The ID
     pub id: Scalar,
-    /// The public schnorr response
-    pub kG: Point,
-    /// The aggregate of the schnorr committed values
-    pub kca: Scalar,
+    /// The proof
+    pub proof: Proof,
 }
 
 #[allow(non_snake_case)]
@@ -34,24 +42,25 @@ impl ID {
         ctx: &[u8],
         rng: &mut RNG,
     ) -> Self {
-        let k = Scalar::random(rng);
-        let c = Self::challenge(id, &(&k * &G), &(a * &G), ctx);
+        let r = Scalar::random(rng);
+        let R = r * G;
+        let c = Self::challenge(id, &R, &(a * &G), ctx);
+        let s = r + c * a;
 
         Self {
             id: *id,
-            kG: &k * G,
-            kca: &k + c * a,
+            proof: Proof { R, s },
         }
     }
 
     /// Compute the schnorr challenge
-    pub fn challenge(id: &Scalar, K: &Point, A: &Point, ctx: &[u8]) -> Scalar {
+    pub fn challenge(id: &Scalar, R: &Point, A: &Point, ctx: &[u8]) -> Scalar {
         let mut hasher = Sha256::new();
         let tag = "WSTS/polynomial-constant";
 
         hasher.update(tag.as_bytes());
         hasher.update(id.to_bytes());
-        hasher.update(K.compress().as_bytes());
+        hasher.update(R.compress().as_bytes());
         hasher.update(A.compress().as_bytes());
         hasher.update(ctx);
 
@@ -60,7 +69,7 @@ impl ID {
 
     /// Verify the proof
     pub fn verify(&self, A: &Point, ctx: &[u8]) -> bool {
-        let c = Self::challenge(&self.id, &self.kG, A, ctx);
-        &self.kca * &G == &self.kG + c * A
+        let c = Self::challenge(&self.id, &self.proof.R, A, ctx);
+        &self.proof.s * &G == &self.proof.R + c * A
     }
 }

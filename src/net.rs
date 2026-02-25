@@ -1,3 +1,4 @@
+use rand_core::{CryptoRng, RngCore};
 use std::fmt::Debug;
 
 use hashbrown::{HashMap, HashSet};
@@ -7,8 +8,14 @@ use tracing::warn;
 
 use crate::{
     common::{MerkleRoot, PolyCommitment, PublicNonce, SignatureShare, TupleProof},
-    curve::{ecdsa, point::Point, scalar::Scalar},
+    curve::{
+        ecdsa,
+        point::{Point, G},
+        scalar::Scalar,
+    },
+    schnorr,
     state_machine::PublicKeys,
+    util::hash_to_scalar,
 };
 
 /// Trait to encapsulate sign/verify, users only need to impl hash
@@ -147,6 +154,66 @@ pub struct DkgPublicShares {
     pub comms: Vec<(u32, PolyCommitment)>,
     /// Ephemeral public key for key exchange
     pub kex_public_key: Point,
+    /// Proof of knowledge of kex_private_key
+    pub kex_proof: schnorr::Proof,
+}
+
+#[allow(non_snake_case)]
+impl DkgPublicShares {
+    /// construct a proof of knowledge of kex_private_key
+    pub fn kex_prove<RNG: RngCore + CryptoRng>(
+        dkg_id: u64,
+        signer_id: u32,
+        comms: &Vec<(u32, PolyCommitment)>,
+        kex_private_key: &Scalar,
+        rng: &mut RNG,
+    ) -> schnorr::Proof {
+        let r = Scalar::random(rng);
+        let R = r * G;
+        let kex_public_key = kex_private_key * G;
+        let c = Self::kex_challenge(&R, dkg_id, signer_id, comms, &kex_public_key);
+        let s = r + c * kex_private_key;
+
+        schnorr::Proof { R, s }
+    }
+
+    /// verify a proof of knowledge of kex_private_key
+    pub fn kex_verify(&self) -> bool {
+        let c = Self::kex_challenge(
+            &self.kex_proof.R,
+            self.dkg_id,
+            self.signer_id,
+            &self.comms,
+            &self.kex_public_key,
+        );
+        &self.kex_proof.s * &G == &self.kex_proof.R + c * &self.kex_public_key
+    }
+
+    /// construct a proof of knowledge of kex_private_key
+    pub fn kex_challenge(
+        R: &Point,
+        dkg_id: u64,
+        signer_id: u32,
+        comms: &Vec<(u32, PolyCommitment)>,
+        kex_public_key: &Point,
+    ) -> Scalar {
+        let mut hasher = Sha256::new();
+        let tag = "WSTS/DKG_PUBLIC_SHARES/KEX_SCHNORR_PROOF";
+
+        hasher.update(tag.as_bytes());
+        hasher.update(R.compress().as_bytes());
+        hasher.update(dkg_id.to_be_bytes());
+        hasher.update(signer_id.to_be_bytes());
+        hasher.update(kex_public_key.compress().as_bytes());
+        for (party_id, comm) in comms {
+            hasher.update(party_id.to_be_bytes());
+            for a in &comm.poly {
+                hasher.update(a.compress().as_bytes());
+            }
+        }
+
+        hash_to_scalar(&mut hasher)
+    }
 }
 
 impl Signable for DkgPublicShares {
@@ -154,6 +221,9 @@ impl Signable for DkgPublicShares {
         hasher.update("DKG_PUBLIC_SHARES".as_bytes());
         hasher.update(self.dkg_id.to_be_bytes());
         hasher.update(self.signer_id.to_be_bytes());
+        hasher.update(self.kex_public_key.compress().as_bytes());
+        hasher.update(self.kex_proof.R.compress().as_bytes());
+        hasher.update(self.kex_proof.s.to_bytes());
         for (party_id, comm) in &self.comms {
             hasher.update(party_id.to_be_bytes());
             for a in &comm.poly {
@@ -729,6 +799,10 @@ mod test {
                 },
             )],
             kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
         };
         let msg = Message::DkgPublicShares(public_shares.clone());
         let coordinator_packet_dkg_public_shares = Packet {
@@ -749,6 +823,20 @@ mod test {
             &test_config.coordinator_public_key
         ));
         assert!(signer_packet_dkg_public_shares.verify(
+            &test_config.public_keys,
+            &test_config.coordinator_public_key
+        ));
+
+        // change the kex_public_key but keep the previous signature
+        let mitm_signer_packet_dkg_public_shares = Packet {
+            sig: signer_packet_dkg_public_shares.sig,
+            msg: Message::DkgPublicShares(DkgPublicShares {
+                kex_public_key: Point::from(Scalar::random(&mut rng)),
+                ..public_shares
+            }),
+        };
+        // packet should no longer verify
+        assert!(!mitm_signer_packet_dkg_public_shares.verify(
             &test_config.public_keys,
             &test_config.coordinator_public_key
         ));

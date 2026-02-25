@@ -862,6 +862,10 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
         let comms = self
             .signer
             .get_poly_commitments(&self.dkg_id.to_be_bytes(), rng);
+        let comms = comms
+            .iter()
+            .map(|poly| (poly.id.id.get_u32(), poly.clone()))
+            .collect();
 
         info!(
             signer_id = %self.signer_id,
@@ -869,18 +873,20 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             "sending DkgPublicShares"
         );
 
-        let mut public_share = DkgPublicShares {
+        let kex_proof = DkgPublicShares::kex_prove(
+            self.dkg_id,
+            self.signer_id,
+            &comms,
+            &self.kex_private_key,
+            rng,
+        );
+        let public_share = DkgPublicShares {
             dkg_id: self.dkg_id,
             signer_id: self.signer_id,
-            comms: Vec::new(),
+            comms,
             kex_public_key: self.kex_private_key * G,
+            kex_proof,
         };
-
-        for poly in &comms {
-            public_share
-                .comms
-                .push((poly.id.id.get_u32(), poly.clone()));
-        }
 
         let public_share = Message::DkgPublicShares(public_share);
         msgs.push(public_share);
@@ -1014,6 +1020,11 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             warn!(%signer_id, "No key_ids configured");
             return Ok(vec![]);
         };
+
+        if !dkg_public_shares.kex_verify() {
+            warn!(signer_id = %dkg_public_shares.signer_id, "received DkgPublicShares with invalid kex_proof");
+            return Ok(vec![]);
+        }
 
         for key_id in signer_key_ids {
             self.kex_public_keys
@@ -1381,11 +1392,14 @@ pub mod test {
             .iter()
             .map(|comm| (comm.id.id.get_u32(), comm.clone()))
             .collect();
+        let kex_private_key = Scalar::random(&mut rng);
+        let kex_proof = DkgPublicShares::kex_prove(0, 0, &comms, &kex_private_key, &mut rng);
         let public_share = DkgPublicShares {
             dkg_id: 0,
             signer_id: 0,
-            comms,
-            kex_public_key: Point::from(Scalar::random(&mut rng)),
+            comms: comms.clone(),
+            kex_public_key: Point::from(kex_private_key),
+            kex_proof: kex_proof.clone(),
         };
         signer.dkg_public_share(&public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());
@@ -1394,14 +1408,9 @@ pub mod test {
         let dup_public_share = DkgPublicShares {
             dkg_id: 0,
             signer_id: 0,
-            comms: vec![(
-                0,
-                PolyCommitment {
-                    id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
-                    poly: vec![],
-                },
-            )],
-            kex_public_key: Point::from(Scalar::random(&mut rng)),
+            comms: comms.clone(),
+            kex_public_key: Point::from(kex_private_key),
+            kex_proof: kex_proof.clone(),
         };
         signer.dkg_public_share(&dup_public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());
@@ -1548,11 +1557,13 @@ pub mod test {
             Signer::<v2::Signer>::new(1, 1, 2, 2, 0, vec![1], private_key, public_keys, &mut rng)
                 .unwrap();
 
+        let kex_proof = DkgPublicShares::kex_prove(0, 1, &vec![], &kex_private_key, &mut rng);
         let public_share = DkgPublicShares {
             dkg_id: 0,
             signer_id: 1,
             comms: vec![],
             kex_public_key,
+            kex_proof: kex_proof.clone(),
         };
         signer.dkg_public_share(&public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());
