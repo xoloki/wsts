@@ -862,6 +862,10 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
         let comms = self
             .signer
             .get_poly_commitments(&self.dkg_id.to_be_bytes(), rng);
+        let comms = comms
+            .iter()
+            .map(|poly| (poly.id.id.get_u32(), poly.clone()))
+            .collect();
 
         info!(
             signer_id = %self.signer_id,
@@ -869,18 +873,20 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             "sending DkgPublicShares"
         );
 
-        let mut public_share = DkgPublicShares {
+        let kex_proof = DkgPublicShares::kex_prove(
+            self.dkg_id,
+            self.signer_id,
+            &comms,
+            &self.kex_private_key,
+            rng,
+        );
+        let public_share = DkgPublicShares {
             dkg_id: self.dkg_id,
             signer_id: self.signer_id,
-            comms: Vec::new(),
+            comms,
             kex_public_key: self.kex_private_key * G,
+            kex_proof,
         };
-
-        for poly in &comms {
-            public_share
-                .comms
-                .push((poly.id.id.get_u32(), poly.clone()));
-        }
 
         let public_share = Message::DkgPublicShares(public_share);
         msgs.push(public_share);
@@ -1188,7 +1194,7 @@ pub mod test {
         common::PolyCommitment,
         curve::{ecdsa, scalar::Scalar},
         net::{DkgBegin, DkgEndBegin, DkgPrivateBegin, DkgPublicShares, DkgStatus, Message},
-        schnorr::ID,
+        schnorr::{self, ID},
         state_machine::{
             signer::{ConfigError, Error, Signer, State as SignerState},
             PublicKeys,
@@ -1386,6 +1392,10 @@ pub mod test {
             signer_id: 0,
             comms,
             kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
         };
         signer.dkg_public_share(&public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());
@@ -1402,6 +1412,10 @@ pub mod test {
                 },
             )],
             kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
         };
         signer.dkg_public_share(&dup_public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());
@@ -1553,6 +1567,10 @@ pub mod test {
             signer_id: 1,
             comms: vec![],
             kex_public_key,
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
         };
         signer.dkg_public_share(&public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());

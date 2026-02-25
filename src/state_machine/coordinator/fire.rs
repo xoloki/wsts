@@ -1502,7 +1502,7 @@ pub mod test {
             DkgBegin, DkgFailure, DkgPrivateShares, DkgPublicShares, Message, NonceRequest, Packet,
             SignatureShareResponse, SignatureType,
         },
-        schnorr::ID,
+        schnorr::{self, ID},
         state_machine::{
             coordinator::{
                 fire::Coordinator as FireCoordinator,
@@ -1615,6 +1615,10 @@ pub mod test {
                 },
             )],
             kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
         };
         let packet = Packet {
             msg: Message::DkgPublicShares(public_shares.clone()),
@@ -1635,6 +1639,10 @@ pub mod test {
                 },
             )],
             kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
         };
         let dup_packet = Packet {
             msg: Message::DkgPublicShares(dup_public_shares.clone()),
@@ -2644,6 +2652,10 @@ pub mod test {
                                 signer_id: shares.signer_id,
                                 comms,
                                 kex_public_key: Point::new(),
+                                kex_proof: schnorr::Proof {
+                                    R: Point::new(),
+                                    s: Scalar::new(),
+                                },
                             }),
                             sig: vec![],
                         }
