@@ -1,3 +1,7 @@
+## SAFETY NOTICE
+
+**This crate is only considered safe to use in the specific configuration, parameterization, and protocol flow in which it is used by the sBTC system (https://github.com/stacks-sbtc/sbtc). Using it in any other context, or modifying the protocol without a thorough cryptographic review, is strongly discouraged and may be insecure.**
+
 # WSTS
 
 [![ci](https://github.com/Trust-Machines/wsts/actions/workflows/ci.yml/badge.svg)](https://github.com/Trust-Machines/wsts/actions/workflows/ci.yml)
