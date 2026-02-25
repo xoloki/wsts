@@ -1604,21 +1604,21 @@ pub mod test {
         let mut coordinator: FireCoordinator<Aggregator> = coordinators[0].clone();
 
         coordinator.state = State::DkgPublicGather;
+        let comms = vec![(
+            0,
+            PolyCommitment {
+                id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
+                poly: vec![],
+            },
+        )];
+        let kex_private_key = Scalar::random(&mut rng);
+        let kex_proof = DkgPublicShares::kex_prove(0, 0, &comms, &kex_private_key, &mut rng);
         let public_shares = DkgPublicShares {
             dkg_id: 0,
             signer_id: 0,
-            comms: vec![(
-                0,
-                PolyCommitment {
-                    id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
-                    poly: vec![],
-                },
-            )],
-            kex_public_key: Point::from(Scalar::random(&mut rng)),
-            kex_proof: schnorr::Proof {
-                R: Point::new(),
-                s: Scalar::new(),
-            },
+            comms: comms.clone(),
+            kex_public_key: Point::from(kex_private_key),
+            kex_proof: kex_proof.clone(),
         };
         let packet = Packet {
             msg: Message::DkgPublicShares(public_shares.clone()),
@@ -1631,18 +1631,9 @@ pub mod test {
         let dup_public_shares = DkgPublicShares {
             dkg_id: 0,
             signer_id: 0,
-            comms: vec![(
-                0,
-                PolyCommitment {
-                    id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
-                    poly: vec![],
-                },
-            )],
-            kex_public_key: Point::from(Scalar::random(&mut rng)),
-            kex_proof: schnorr::Proof {
-                R: Point::new(),
-                s: Scalar::new(),
-            },
+            comms: comms.clone(),
+            kex_public_key: Point::from(kex_private_key),
+            kex_proof: kex_proof.clone(),
         };
         let dup_packet = Packet {
             msg: Message::DkgPublicShares(dup_public_shares.clone()),
