@@ -1460,9 +1460,20 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
         aggregate_key: Point,
         party_polynomials: Vec<(u32, PolyCommitment)>,
     ) -> Result<(), Error> {
-        let computed_key = party_polynomials
-            .iter()
-            .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
+        let mut computed_key = Point::default();
+        let mut bad_poly_commitments = vec![];
+        for (i, comm) in &party_polynomials {
+            if let Some(p) = comm.poly.first() {
+                computed_key += p;
+            } else {
+                bad_poly_commitments.push(compute::id(*i));
+            }
+        }
+        if !bad_poly_commitments.is_empty() {
+            return Err(Error::Aggregator(AggregatorError::BadPolyCommitments(
+                bad_poly_commitments,
+            )));
+        }
         if computed_key != aggregate_key {
             return Err(Error::AggregateKeyPolynomialMismatch(
                 computed_key,
