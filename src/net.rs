@@ -88,6 +88,7 @@ pub enum DkgStatus {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 /// Encapsulation of all possible network message types
 pub enum Message {
     /// Tell signers to begin DKG by sending DKG public shares

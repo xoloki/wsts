@@ -1494,11 +1494,13 @@ pub mod test {
             Signer::<v1::Signer>::new(1, 1, 2, 2, 0, vec![1], private_key, public_keys, &mut rng)
                 .unwrap();
 
+        let kex_proof = DkgPublicShares::kex_prove(0, 1, &vec![], &kex_private_key, &mut rng);
         let public_share = DkgPublicShares {
             dkg_id: 0,
             signer_id: 1,
             comms: vec![],
             kex_public_key,
+            kex_proof: kex_proof.clone(),
         };
         signer.dkg_public_share(&public_share).unwrap();
         assert_eq!(1, signer.dkg_public_shares.len());
