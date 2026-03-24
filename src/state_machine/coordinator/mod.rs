@@ -380,6 +380,7 @@ pub mod test {
         curve::{ecdsa, point::Point, point::G, scalar::Scalar},
         errors::AggregatorError,
         net::{DkgFailure, Message, Packet, SignatureShareResponse, SignatureType},
+        schnorr,
         state_machine::{
             coordinator::{Config, Coordinator as CoordinatorTrait, Error, State},
             signer::{Error as SignerError, Signer},
@@ -1713,6 +1714,10 @@ pub mod test {
                             signer_id: shares.signer_id,
                             comms: vec![],
                             kex_public_key: Point::new(),
+                            kex_proof: schnorr::Proof {
+                                R: Point::new(),
+                                s: Scalar::new(),
+                            },
                         };
                         Packet {
                             msg: Message::DkgPublicShares(public_shares),
