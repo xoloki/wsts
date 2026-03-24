@@ -865,7 +865,7 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 }
             })
             .fold(Point::default(), |s, (_, comm)| {
-                if let Some(p) = comm.poly.get(0) {
+                if let Some(p) = comm.poly.first() {
                     s + p
                 } else {
                     warn!("Empty polynomial when computing aggregate public key");
