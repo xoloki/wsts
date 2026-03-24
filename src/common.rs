@@ -35,7 +35,7 @@ pub struct PolyCommitment {
 impl PolyCommitment {
     /// Verify the wrapped schnorr ID
     pub fn verify(&self, ctx: &[u8]) -> bool {
-        self.poly.len() > 0 && self.id.verify(&self.poly[0], ctx)
+        !self.poly.is_empty() && self.id.verify(&self.poly[0], ctx)
     }
 }
 
