@@ -10,6 +10,7 @@ use crate::{
         point::{Point, G},
         scalar::Scalar,
     },
+    errors::AggregatorError,
     net::{
         DkgBegin, DkgEnd, DkgEndBegin, DkgFailure, DkgPrivateBegin, DkgPrivateShares,
         DkgPublicShares, DkgStatus, Message, NonceRequest, NonceResponse, Packet, Signable,
@@ -499,16 +500,25 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 return Ok(());
             }
 
-            self.dkg_wait_signer_ids
+            let waiting = self
+                .dkg_wait_signer_ids
                 .remove(&dkg_public_shares.signer_id);
 
-            self.dkg_public_shares
-                .insert(dkg_public_shares.signer_id, dkg_public_shares.clone());
-            debug!(
-                dkg_id = %dkg_public_shares.dkg_id,
-                signer_id = %dkg_public_shares.signer_id,
-                "DkgPublicShares received"
-            );
+            if waiting {
+                self.dkg_public_shares
+                    .insert(dkg_public_shares.signer_id, dkg_public_shares.clone());
+                debug!(
+                    dkg_id = %dkg_public_shares.dkg_id,
+                    signer_id = %dkg_public_shares.signer_id,
+                    "DkgPublicShares received"
+                );
+            } else {
+                warn!(
+                    dkg_id = %dkg_public_shares.dkg_id,
+                    signer_id = %dkg_public_shares.signer_id,
+                    "Got DkgPublicShares from signer who we weren't waiting on"
+                );
+            }
         }
 
         if self.dkg_wait_signer_ids.is_empty() {
@@ -546,16 +556,25 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 return Ok(());
             }
 
-            self.dkg_wait_signer_ids
+            let waiting = self
+                .dkg_wait_signer_ids
                 .remove(&dkg_private_shares.signer_id);
 
-            self.dkg_private_shares
-                .insert(dkg_private_shares.signer_id, dkg_private_shares.clone());
-            info!(
-                dkg_id = %dkg_private_shares.dkg_id,
-                signer_id = %dkg_private_shares.signer_id,
-                "DkgPrivateShares received"
-            );
+            if waiting {
+                self.dkg_private_shares
+                    .insert(dkg_private_shares.signer_id, dkg_private_shares.clone());
+                info!(
+                    dkg_id = %dkg_private_shares.dkg_id,
+                    signer_id = %dkg_private_shares.signer_id,
+                    "DkgPrivateShares received"
+                );
+            } else {
+                warn!(
+                    dkg_id = %dkg_private_shares.dkg_id,
+                    signer_id = %dkg_private_shares.signer_id,
+                    "Got DkgPrivateShares from signer who we weren't waiting on"
+                );
+            }
         }
 
         if self.dkg_wait_signer_ids.is_empty() {
@@ -601,7 +620,11 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
         // this will be used to report signers who were malicious in this DKG round, as opposed to
         // self.malicious_dkg_signer_ids which contains all DKG signers who were ever malicious
         let mut malicious_signers = HashSet::new();
-        let threshold: usize = self.config.threshold.try_into().unwrap();
+        let threshold: usize = self
+            .config
+            .threshold
+            .try_into()
+            .map_err(Error::TryFromInt)?;
         if self.dkg_wait_signer_ids.is_empty() {
             // if there are any errors, mark signers malicious and retry
             for (signer_id, dkg_end) in &self.dkg_end_messages {
@@ -794,17 +817,61 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
     fn dkg_end_gathered(&mut self) -> Result<(), Error> {
         // Cache the polynomials used in DKG for the aggregator
         for signer_id in self.dkg_private_shares.keys() {
-            for (party_id, comm) in &self.dkg_public_shares[signer_id].comms {
-                self.party_polynomials.insert(*party_id, comm.clone());
+            if let Some(dkg_public_shares) = &self.dkg_public_shares.get(signer_id) {
+                for (party_id, comm) in &dkg_public_shares.comms {
+                    self.party_polynomials.insert(*party_id, comm.clone());
+                }
+            } else {
+                error!(
+                    signer_id = %signer_id,
+                    "No DkgPublicShares from signer who sent DkgPrivateShares"
+                );
+                return Err(Error::NoPublicSharesForSigner(*signer_id));
             }
+        }
+
+        // Final sanity check on PolyComitments
+        let threshold: usize = self
+            .config
+            .threshold
+            .try_into()
+            .map_err(Error::TryFromInt)?;
+        let mut bad_ids = Vec::new();
+        for (party_id, comm) in &self.party_polynomials {
+            if !check_public_shares(comm, threshold, &self.current_dkg_id.to_be_bytes()) {
+                bad_ids.push(compute::id(*party_id));
+            }
+        }
+
+        if !bad_ids.is_empty() {
+            return Err(Error::Aggregator(AggregatorError::BadPolyCommitments(
+                bad_ids,
+            )));
         }
 
         // Calculate the aggregate public key
         let key = self
             .dkg_end_messages
             .keys()
-            .flat_map(|signer_id| self.dkg_public_shares[signer_id].comms.clone())
-            .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
+            .flat_map(|signer_id| {
+                if let Some(dkg_public_shares) = self.dkg_public_shares.get(signer_id) {
+                    dkg_public_shares.comms.clone()
+                } else {
+                    warn!(
+                        signer_id = %signer_id,
+                        "No DkgPublicShares from signer who sent DkgEnd"
+                    );
+                    vec![]
+                }
+            })
+            .fold(Point::default(), |s, (_, comm)| {
+                if let Some(p) = comm.poly.first() {
+                    s + p
+                } else {
+                    warn!("Empty polynomial when computing aggregate public key");
+                    s
+                }
+            });
 
         info!("Aggregate public key: {key}");
         self.aggregate_public_key = Some(key);
@@ -1131,7 +1198,14 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
             let shares = message_nonce
                 .public_nonces
                 .iter()
-                .flat_map(|(i, _)| self.signature_shares[i].clone())
+                .flat_map(|(i, _)| {
+                    if let Some(shares) = self.signature_shares.get(i) {
+                        shares.clone()
+                    } else {
+                        warn!(sign_id = %self.current_sign_id, signer_id = %i, "Have nonces but no signature shares from signer");
+                        vec![]
+                    }
+                })
                 .collect::<Vec<SignatureShare>>();
 
             debug!(
@@ -1386,9 +1460,20 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
         aggregate_key: Point,
         party_polynomials: Vec<(u32, PolyCommitment)>,
     ) -> Result<(), Error> {
-        let computed_key = party_polynomials
-            .iter()
-            .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
+        let mut computed_key = Point::default();
+        let mut bad_poly_commitments = vec![];
+        for (i, comm) in &party_polynomials {
+            if let Some(p) = comm.poly.first() {
+                computed_key += p;
+            } else {
+                bad_poly_commitments.push(compute::id(*i));
+            }
+        }
+        if !bad_poly_commitments.is_empty() {
+            return Err(Error::Aggregator(AggregatorError::BadPolyCommitments(
+                bad_poly_commitments,
+            )));
+        }
         if computed_key != aggregate_key {
             return Err(Error::AggregateKeyPolynomialMismatch(
                 computed_key,
@@ -1624,10 +1709,17 @@ pub mod test {
             msg: Message::DkgPublicShares(public_shares.clone()),
             sig: Default::default(),
         };
+
+        // check that shares are ignored if not waiting on that signer
+        coordinator.dkg_wait_signer_ids.insert(1);
+        coordinator.gather_public_shares(&packet).unwrap();
+        assert_eq!(0, coordinator.dkg_public_shares.len());
+
+        coordinator.dkg_wait_signer_ids.insert(0);
         coordinator.gather_public_shares(&packet).unwrap();
         assert_eq!(1, coordinator.dkg_public_shares.len());
 
-        // check that a duplicate public share is ignored
+        // check that a duplicate public share is ignored even if the state machine is tricked into waiting on it
         let dup_public_shares = DkgPublicShares {
             dkg_id: 0,
             signer_id: 0,
@@ -1640,6 +1732,7 @@ pub mod test {
             sig: Default::default(),
         };
 
+        coordinator.dkg_wait_signer_ids.insert(0);
         coordinator.gather_public_shares(&dup_packet).unwrap();
         assert_eq!(1, coordinator.dkg_public_shares.len());
         assert_eq!(
@@ -1681,10 +1774,17 @@ pub mod test {
             msg: Message::DkgPrivateShares(private_share.clone()),
             sig: Default::default(),
         };
+
+        // check that shares are ignored if not waiting on that signer
+        coordinator.dkg_wait_signer_ids.insert(1);
+        coordinator.gather_private_shares(&packet).unwrap();
+        assert_eq!(0, coordinator.dkg_private_shares.len());
+
+        coordinator.dkg_wait_signer_ids.insert(0);
         coordinator.gather_private_shares(&packet).unwrap();
         assert_eq!(1, coordinator.dkg_private_shares.len());
 
-        // check that a duplicate private share is ignored
+        // check that a duplicate private share is ignored even if the state machine is tricked into waiting for it
         let dup_private_share = DkgPrivateShares {
             dkg_id: 0,
             signer_id: 0,
@@ -1694,6 +1794,7 @@ pub mod test {
             msg: Message::DkgPrivateShares(dup_private_share.clone()),
             sig: Default::default(),
         };
+        coordinator.dkg_wait_signer_ids.insert(0);
         coordinator.gather_private_shares(&packet).unwrap();
         assert_eq!(1, coordinator.dkg_private_shares.len());
         assert_eq!(
