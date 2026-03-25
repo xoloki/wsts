@@ -1011,10 +1011,10 @@ pub mod test {
         state_machine::coordinator::{
             frost::Coordinator as FrostCoordinator,
             test::{
-                bad_signature_share_request, check_signature_shares, coordinator_state_machine,
-                empty_private_shares, empty_public_shares, equal_after_save_load, invalid_nonce,
-                new_coordinator, run_dkg_sign, setup, start_dkg_round, start_signing_round,
-                verify_packet_sigs, btc_sign_verify,
+                bad_signature_share_request, btc_sign_verify, check_signature_shares,
+                coordinator_state_machine, empty_private_shares, empty_public_shares,
+                equal_after_save_load, invalid_nonce, new_coordinator, run_dkg_sign, setup,
+                start_dkg_round, start_signing_round, verify_packet_sigs,
             },
             Config, Coordinator as CoordinatorTrait, State,
         },

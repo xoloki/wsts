@@ -226,13 +226,13 @@ impl UnsignedTx {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bitcoin::key::TapTweak;
     use crate::{
         compute,
         taproot::{test_helpers, SchnorrProof},
         traits::{Aggregator, Signer},
         v2,
     };
+    use bitcoin::key::TapTweak;
 
     use bitcoin::{
         blockdata::{

@@ -1592,11 +1592,11 @@ pub mod test {
             coordinator::{
                 fire::Coordinator as FireCoordinator,
                 test::{
-                    bad_signature_share_request, check_signature_shares, coordinator_state_machine,
-                    empty_private_shares, empty_public_shares, equal_after_save_load,
-                    feedback_messages, feedback_mutated_messages, gen_nonces, invalid_nonce,
-                    new_coordinator, run_dkg_sign, setup, setup_with_timeouts, start_dkg_round,
-                    start_signing_round, verify_packet_sigs, btc_sign_verify,
+                    bad_signature_share_request, btc_sign_verify, check_signature_shares,
+                    coordinator_state_machine, empty_private_shares, empty_public_shares,
+                    equal_after_save_load, feedback_messages, feedback_mutated_messages,
+                    gen_nonces, invalid_nonce, new_coordinator, run_dkg_sign, setup,
+                    setup_with_timeouts, start_dkg_round, start_signing_round, verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
             },
