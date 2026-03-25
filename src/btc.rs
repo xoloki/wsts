@@ -1,7 +1,6 @@
 use bitcoin::{
     absolute::LockTime,
     consensus::Encodable,
-    key::TapTweak,
     secp256k1::{self, Secp256k1, Verification, XOnlyPublicKey},
     sighash::{Prevouts, SighashCache},
     taproot::{LeafVersion, Signature},
@@ -227,6 +226,7 @@ impl UnsignedTx {
 #[cfg(test)]
 mod test {
     use super::*;
+    use bitcoin::key::TapTweak;
     use crate::{
         compute,
         taproot::{test_helpers, SchnorrProof},

@@ -1014,7 +1014,7 @@ pub mod test {
                 bad_signature_share_request, check_signature_shares, coordinator_state_machine,
                 empty_private_shares, empty_public_shares, equal_after_save_load, invalid_nonce,
                 new_coordinator, run_dkg_sign, setup, start_dkg_round, start_signing_round,
-                verify_packet_sigs,
+                verify_packet_sigs, btc_sign_verify,
             },
             Config, Coordinator as CoordinatorTrait, State,
         },
@@ -1613,5 +1613,16 @@ pub mod test {
     #[test]
     fn verify_packet_sigs_v2() {
         verify_packet_sigs::<FrostCoordinator<v2::Aggregator>, v2::Signer>();
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn btc_sign_verify_v1() {
+        btc_sign_verify::<FrostCoordinator<v1::Aggregator>, v1::Signer>(5, 2);
+    }
+
+    #[test]
+    fn btc_sign_verify_v2() {
+        btc_sign_verify::<FrostCoordinator<v2::Aggregator>, v2::Signer>(5, 2);
     }
 }
