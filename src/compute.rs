@@ -13,77 +13,77 @@ use crate::{
 };
 
 #[allow(non_snake_case)]
-/// Compute the group commitment from the list of PartyIDs and nonce commitments
+/// Compute the group commitment from the list of PartyIDs and nonce commitments using XMD-based expansion.
 pub fn group_commitment(commitment_list: &[(Scalar, PublicNonce)]) -> Scalar {
-    let mut hasher = Sha256::new();
-    let prefix = "WSTS/group_commitment";
+    let prefix = b"WSTS/group_commitment";
 
-    hasher.update(prefix.as_bytes());
+    let mut buf = Vec::new();
     for (id, public_nonce) in commitment_list {
-        hasher.update(id.to_bytes());
-        hasher.update(public_nonce.D.compress().as_bytes());
-        hasher.update(public_nonce.E.compress().as_bytes());
+        buf.extend_from_slice(&id.to_bytes());
+        buf.extend_from_slice(public_nonce.D.compress().as_bytes());
+        buf.extend_from_slice(public_nonce.E.compress().as_bytes());
     }
 
-    hash_to_scalar(&mut hasher)
+    expand_to_scalar(&buf, prefix)
+        .expect("FATAL: DST is less than 256 bytes so operation should not fail")
 }
 
 #[allow(non_snake_case)]
-/// Compute the group commitment from the list of PartyIDs and nonce commitments
+/// Compute the group commitment from the list of PartyIDs and nonce commitments using XMD-based expansion.
 pub fn group_commitment_compressed(commitment_list: &[(Scalar, Compressed, Compressed)]) -> Scalar {
-    let mut hasher = Sha256::new();
-    let prefix = "WSTS/group_commitment";
+    let prefix = b"WSTS/group_commitment";
 
-    hasher.update(prefix.as_bytes());
+    let mut buf = Vec::new();
     for (id, hiding_commitment, binding_commitment) in commitment_list {
-        hasher.update(id.to_bytes());
-        hasher.update(hiding_commitment.as_bytes());
-        hasher.update(binding_commitment.as_bytes());
+        buf.extend_from_slice(&id.to_bytes());
+        buf.extend_from_slice(hiding_commitment.as_bytes());
+        buf.extend_from_slice(binding_commitment.as_bytes());
     }
 
-    hash_to_scalar(&mut hasher)
+    expand_to_scalar(&buf, prefix)
+        .expect("FATAL: DST is less than 256 bytes so operation should not fail")
 }
 
 #[allow(non_snake_case)]
-/// Compute a binding value from the party ID, public nonces, and signed message
+/// Compute a binding value from the party ID, public nonces, and signed message using XMD-based expansion.
 pub fn binding(
     id: &Scalar,
     group_public_key: Point,
     commitment_list: &[(Scalar, PublicNonce)],
     msg: &[u8],
 ) -> Scalar {
-    let mut hasher = Sha256::new();
-    let prefix = "WSTS/binding";
+    let prefix = b"WSTS/binding";
     let encoded_group_commitment = group_commitment(commitment_list);
 
-    hasher.update(prefix.as_bytes());
-    hasher.update(group_public_key.compress().as_bytes());
-    hasher.update(msg);
-    hasher.update(encoded_group_commitment.to_bytes());
-    hasher.update(id.to_bytes());
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&id.to_bytes());
+    buf.extend_from_slice(group_public_key.compress().as_bytes());
+    buf.extend_from_slice(msg);
+    buf.extend_from_slice(&encoded_group_commitment.to_bytes());
 
-    hash_to_scalar(&mut hasher)
+    expand_to_scalar(&buf, prefix)
+        .expect("FATAL: DST is less than 256 bytes so operation should not fail")
 }
 
 #[allow(non_snake_case)]
-/// Compute a binding value from the party ID, public nonces, and signed message
+/// Compute a binding value from the party ID, public nonces, and signed message using XMD-based expansion.
 pub fn binding_compressed(
     id: &Scalar,
     group_public_key: Point,
     commitment_list: &[(Scalar, Compressed, Compressed)],
     msg: &[u8],
 ) -> Scalar {
-    let mut hasher = Sha256::new();
-    let prefix = "WSTS/binding";
+    let prefix = b"WSTS/binding";
     let encoded_group_commitment = group_commitment_compressed(commitment_list);
 
-    hasher.update(prefix.as_bytes());
-    hasher.update(group_public_key.compress().as_bytes());
-    hasher.update(msg);
-    hasher.update(encoded_group_commitment.to_bytes());
-    hasher.update(id.to_bytes());
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&id.to_bytes());
+    buf.extend_from_slice(group_public_key.compress().as_bytes());
+    buf.extend_from_slice(msg);
+    buf.extend_from_slice(&encoded_group_commitment.to_bytes());
 
-    hash_to_scalar(&mut hasher)
+    expand_to_scalar(&buf, prefix)
+        .expect("FATAL: DST is less than 256 bytes so operation should not fail")
 }
 
 #[allow(non_snake_case)]
