@@ -1,7 +1,6 @@
 use bitcoin::{
     absolute::LockTime,
     consensus::Encodable,
-    key::TapTweak,
     secp256k1::{self, Secp256k1, Verification, XOnlyPublicKey},
     sighash::{Prevouts, SighashCache},
     taproot::{LeafVersion, Signature},
@@ -233,6 +232,7 @@ mod test {
         traits::{Aggregator, Signer},
         v2,
     };
+    use bitcoin::key::TapTweak;
 
     use bitcoin::{
         blockdata::{
