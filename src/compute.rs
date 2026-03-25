@@ -13,20 +13,32 @@ use crate::{
 };
 
 #[allow(non_snake_case)]
-/// Compute a binding value from the party ID, public nonces, and signed message using XMD-based expansion.
-pub fn binding(id: &Scalar, B: &[PublicNonce], msg: &[u8]) -> Scalar {
-    let prefix = b"WSTS/binding";
+/// Compute the group commitment from the list of PartyIDs and nonce commitments using XMD-based expansion.
+pub fn group_commitment(commitment_list: &[(Scalar, PublicNonce)]) -> Scalar {
+    let prefix = b"WSTS/group_commitment";
 
-    // Serialize all input into a buffer
     let mut buf = Vec::new();
-    buf.extend_from_slice(&id.to_bytes());
-
-    for b in B {
-        buf.extend_from_slice(b.D.compress().as_bytes());
-        buf.extend_from_slice(b.E.compress().as_bytes());
+    for (id, public_nonce) in commitment_list {
+        buf.extend_from_slice(&id.to_bytes());
+        buf.extend_from_slice(public_nonce.D.compress().as_bytes());
+        buf.extend_from_slice(public_nonce.E.compress().as_bytes());
     }
 
-    buf.extend_from_slice(msg);
+    expand_to_scalar(&buf, prefix)
+        .expect("FATAL: DST is less than 256 bytes so operation should not fail")
+}
+
+#[allow(non_snake_case)]
+/// Compute the group commitment from the list of PartyIDs and nonce commitments using XMD-based expansion.
+pub fn group_commitment_compressed(commitment_list: &[(Scalar, Compressed, Compressed)]) -> Scalar {
+    let prefix = b"WSTS/group_commitment";
+
+    let mut buf = Vec::new();
+    for (id, hiding_commitment, binding_commitment) in commitment_list {
+        buf.extend_from_slice(&id.to_bytes());
+        buf.extend_from_slice(hiding_commitment.as_bytes());
+        buf.extend_from_slice(binding_commitment.as_bytes());
+    }
 
     expand_to_scalar(&buf, prefix)
         .expect("FATAL: DST is less than 256 bytes so operation should not fail")
@@ -34,19 +46,41 @@ pub fn binding(id: &Scalar, B: &[PublicNonce], msg: &[u8]) -> Scalar {
 
 #[allow(non_snake_case)]
 /// Compute a binding value from the party ID, public nonces, and signed message using XMD-based expansion.
-pub fn binding_compressed(id: &Scalar, B: &[(Compressed, Compressed)], msg: &[u8]) -> Scalar {
+pub fn binding(
+    id: &Scalar,
+    group_public_key: Point,
+    commitment_list: &[(Scalar, PublicNonce)],
+    msg: &[u8],
+) -> Scalar {
     let prefix = b"WSTS/binding";
+    let encoded_group_commitment = group_commitment(commitment_list);
 
-    // Serialize all input into a buffer
     let mut buf = Vec::new();
     buf.extend_from_slice(&id.to_bytes());
-
-    for (D, E) in B {
-        buf.extend_from_slice(D.as_bytes());
-        buf.extend_from_slice(E.as_bytes());
-    }
-
+    buf.extend_from_slice(group_public_key.compress().as_bytes());
     buf.extend_from_slice(msg);
+    buf.extend_from_slice(&encoded_group_commitment.to_bytes());
+
+    expand_to_scalar(&buf, prefix)
+        .expect("FATAL: DST is less than 256 bytes so operation should not fail")
+}
+
+#[allow(non_snake_case)]
+/// Compute a binding value from the party ID, public nonces, and signed message using XMD-based expansion.
+pub fn binding_compressed(
+    id: &Scalar,
+    group_public_key: Point,
+    commitment_list: &[(Scalar, Compressed, Compressed)],
+    msg: &[u8],
+) -> Scalar {
+    let prefix = b"WSTS/binding";
+    let encoded_group_commitment = group_commitment_compressed(commitment_list);
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&id.to_bytes());
+    buf.extend_from_slice(group_public_key.compress().as_bytes());
+    buf.extend_from_slice(msg);
+    buf.extend_from_slice(&encoded_group_commitment.to_bytes());
 
     expand_to_scalar(&buf, prefix)
         .expect("FATAL: DST is less than 256 bytes so operation should not fail")
@@ -82,10 +116,20 @@ pub fn lambda(i: u32, key_ids: &[u32]) -> Scalar {
 // Is this the best way to return these values?
 #[allow(non_snake_case)]
 /// Compute the intermediate values used in both the parties and the aggregator
-pub fn intermediate(msg: &[u8], party_ids: &[u32], nonces: &[PublicNonce]) -> (Vec<Point>, Point) {
+pub fn intermediate(
+    msg: &[u8],
+    group_key: Point,
+    party_ids: &[u32],
+    nonces: &[PublicNonce],
+) -> (Vec<Point>, Point) {
+    let commitment_list: Vec<(Scalar, PublicNonce)> = party_ids
+        .iter()
+        .zip(nonces)
+        .map(|(i, nonce)| (Scalar::from(*i), nonce.clone()))
+        .collect();
     let rhos: Vec<Scalar> = party_ids
         .iter()
-        .map(|&i| binding(&id(i), nonces, msg))
+        .map(|i| binding(&id(*i), group_key, &commitment_list, msg))
         .collect();
     let R_vec: Vec<Point> = zip(nonces, rhos)
         .map(|(nonce, rho)| nonce.D + rho * nonce.E)
@@ -99,19 +143,21 @@ pub fn intermediate(msg: &[u8], party_ids: &[u32], nonces: &[PublicNonce]) -> (V
 /// Compute the aggregate nonce
 pub fn aggregate_nonce(
     msg: &[u8],
+    group_key: Point,
     party_ids: &[u32],
     nonces: &[PublicNonce],
 ) -> Result<Point, PointError> {
-    let compressed_nonces: Vec<(Compressed, Compressed)> = nonces
+    let commitment_list: Vec<(Scalar, Compressed, Compressed)> = party_ids
         .iter()
-        .map(|nonce| (nonce.D.compress(), nonce.E.compress()))
+        .zip(nonces)
+        .map(|(id, nonce)| (Scalar::from(*id), nonce.D.compress(), nonce.E.compress()))
         .collect();
     let scalars: Vec<Scalar> = party_ids
         .iter()
         .flat_map(|&i| {
             [
                 Scalar::from(1),
-                binding_compressed(&id(i), &compressed_nonces, msg),
+                binding_compressed(&id(i), group_key, &commitment_list, msg),
             ]
         })
         .collect();
