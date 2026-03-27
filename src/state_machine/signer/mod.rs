@@ -1075,7 +1075,6 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             return Ok(vec![]);
         }
 
-
         // make a HashSet of our key_ids so we can quickly query them
         let key_ids: HashSet<u32> = self.signer.get_key_ids().into_iter().collect();
 
