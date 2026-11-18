@@ -5,17 +5,12 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
-  # Lets the publish path be exercised without a tag, so that a release tag is
-  # not simultaneously this workflow's first execution and a real upload. A
-  # dispatch with dry_run left at true covers checkout, toolchain install, the
-  # environment approval gate and packaging, and mints no credential at all.
+  # Validation only. A dispatch exercises checkout, toolchain, the environment
+  # approval gate, packaging, and the trusted-publishing OIDC exchange -- but
+  # can never upload, because the publish step below requires a tag push. That
+  # keeps a signed tag the only route to a release, so permitting `main` to
+  # deploy to the crates.io environment grants no publishing capability.
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Package and verify only; do not upload to crates.io"
-        type: boolean
-        required: false
-        default: true
 
 permissions:
   contents: read
@@ -57,16 +52,17 @@ jobs:
       # NOTE: the crates.io trusted publisher record names this file. Renaming
       # publish.yml breaks publishing until that record is updated.
       #
-      # Gated identically to the publish step below, so a dry run never
-      # requests a token.
+      # Runs on dispatch too, so that the OIDC exchange -- the part most
+      # likely to be misconfigured -- is proven before any tag is cut. The
+      # token is short-lived and revoked by the action's post step, and on a
+      # dispatch it is simply never used.
       - name: Authenticate with crates.io
         id: auth
-        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
       - name: Cargo Publish
         id: cargo_publish
-        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
