@@ -192,6 +192,7 @@ pub trait Aggregator: Clone + Debug + PartialEq {
 }
 
 /// Helper functions for tests
+#[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     use hashbrown::HashMap;
     use rand_core::{CryptoRng, RngCore};

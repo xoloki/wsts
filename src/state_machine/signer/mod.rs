@@ -1560,12 +1560,10 @@ pub mod test {
     }
 
     #[test]
-    #[cfg(feature = "with_v1")]
     fn bad_config_v2() {
-        bad_config::<v1::Signer>();
+        bad_config::<v2::Signer>();
     }
 
-    #[allow(dead_code)]
     fn bad_config<SignerType: SignerTrait>() {
         let mut rng = create_rng();
 
@@ -2051,10 +2049,6 @@ pub mod test {
     }
 
     fn dkg_ended<SignerType: SignerTrait>() {
-        /*tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();*/
         let mut rng = create_rng();
         let mut signer = Signer::<SignerType>::new(
             1,

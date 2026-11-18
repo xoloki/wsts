@@ -693,6 +693,7 @@ impl traits::Signer for Party {
 }
 
 /// Helper functions for tests
+#[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     use super::Scalar;
     use crate::common::{PolyCommitment, PublicNonce};

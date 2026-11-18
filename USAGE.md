@@ -32,6 +32,7 @@ You can use the following RNG implementations:
   
   ```rust
   use rand_chacha::ChaCha20Rng;
+  use rand_core::SeedableRng;
 
   let mut rng = ChaCha20Rng::from_entropy();
   ```

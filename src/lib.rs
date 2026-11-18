@@ -1,5 +1,8 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
+// Included so that the examples in USAGE.md are compiled as doctests;
+// otherwise nothing keeps them in step with the API.
+#![doc = include_str!("../USAGE.md")]
 
 /// test bitcoin/taproot integration using libbitcoin_consensus
 #[cfg(any(test, feature = "testing"))]
