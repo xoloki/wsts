@@ -1,9 +1,18 @@
 # Usage
 
-Applications which use `WSTS` will typically run both `Signer` and `Coordinator` state machines, in order to be able to handle all parts of the protocol. Because of this, these state machines do not verify packets as they come in; this would lead to duplicate work, and require the state machines to have all keys in their configs, including knowing who is the active coordinator. This is out of scope for the library. Thus applications `must` verify packets before calling `process_message` on them.
+Applications which use `WSTS` will typically run both `Signer` and `Coordinator` state machines, in order to be able to handle all parts of the protocol.
 
-This addresses the audit critical issues [CR-01](https://github.com/xoloki/wsts/issues/66) and [CR-02](https://github.com/xoloki/wsts/issues/67).
+## Packet verification
 
+Both state machines verify the signature on each incoming `Packet`, and do so by default. The coordinator is controlled by `Config::verify_packet_sigs` and the signer by the public `Signer::verify_packet_sigs` field, which is persisted in `SavedState`; both are `true` unless you set them otherwise.
+
+Verification needs the state machine to know two things: the signer public keys, via `public_keys`, and the active coordinator's public key, via `coordinator_public_key`. Without the latter, `process` and `process_message` return `Error::MissingCoordinatorPublicKey`; a packet whose signature does not check out returns `Error::InvalidPacketSignature`.
+
+Set the flag to `false` if the calling application has already verified the packet, so the work is not done twice — an application running both state machines over the same packet stream would otherwise verify each packet twice. **If you disable verification, the application `must` verify packets itself before calling `process_message` on them.**
+
+This is what addresses the audit critical issues [CR-01](https://github.com/xoloki/wsts/issues/66) and [CR-02](https://github.com/xoloki/wsts/issues/67). Verification moved into the library in [#153](https://github.com/xoloki/wsts/pull/153); before that it was the application's responsibility in every case.
+
+## Random number generation
 
 To ensure flexibility, these state machines require the user to provide a random number generator (RNG) that implements the `RngCore` and `CryptoRng` traits.
 
