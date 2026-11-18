@@ -35,6 +35,7 @@ num-traits = "0.2"
 polynomial = { version = "0.2.5", features = ["serde"] }
 rand_core = "0.6"
 p256k1 = { version = "7.2", default-features = false }
+k256 = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 thiserror = "1.0"
@@ -47,6 +48,7 @@ bitcoinconsensus = { version = "0.106.0", default-features = false }
 criterion = "0.5.1"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 rand = "0.8.5"
+ciborium = "0.2"
 rand_chacha = "0.3.1"
 
 [[bench]]
@@ -65,3 +67,13 @@ crate-type = ["lib"]   # The crate types to generate.
 
 [package.metadata.docs.rs]
 all-features = true
+
+# The k256 fork's bucketed-Pippenger MSM depends on unpublished changes in its sibling
+# crates, which its own workspace supplies via [patch.crates-io]. Those patches do not
+# carry through a git dependency, so they are mirrored here, pinned to the same rev.
+# All of this goes away when the work lands upstream and k256 is taken from crates.io.
+[patch.crates-io]
+hash2curve = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }
+primefield = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }
+primeorder = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }
+wnaf = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }

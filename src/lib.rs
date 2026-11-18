@@ -39,3 +39,6 @@ pub mod v2;
 pub mod vss;
 
 pub use p256k1 as curve;
+
+/// secp256k1 arithmetic backed by RustCrypto `k256`, replacing `p256k1`
+pub mod curve_k256;
