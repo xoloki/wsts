@@ -386,6 +386,38 @@ impl DivAssign for Scalar {
     }
 }
 
+impl Mul<super::point::Point> for Scalar {
+    type Output = super::point::Point;
+
+    fn mul(self, p: super::point::Point) -> super::point::Point {
+        p * self
+    }
+}
+
+impl Mul<&super::point::Point> for Scalar {
+    type Output = super::point::Point;
+
+    fn mul(self, p: &super::point::Point) -> super::point::Point {
+        p * &self
+    }
+}
+
+impl Mul<super::point::Point> for &Scalar {
+    type Output = super::point::Point;
+
+    fn mul(self, p: super::point::Point) -> super::point::Point {
+        p * *self
+    }
+}
+
+impl Mul<&super::point::Point> for &Scalar {
+    type Output = super::point::Point;
+
+    fn mul(self, p: &super::point::Point) -> super::point::Point {
+        p * self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Scalar;

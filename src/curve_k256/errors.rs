@@ -2,7 +2,9 @@
 
 use core::fmt::{Display, Formatter, Result as FmtResult};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Errors decoding base58
 pub enum Base58Error {
     /// The input was not valid base58
@@ -17,7 +19,7 @@ impl Display for Base58Error {
 
 impl std::error::Error for Base58Error {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Errors converting between representations
 pub enum ConversionError {
     /// The input had the wrong number of bytes

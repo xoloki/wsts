@@ -12,6 +12,9 @@
 //! so keys, saved DKG state and network packets written by a `p256k1` build stay readable.
 
 pub mod errors;
+pub mod field;
+pub mod point;
 pub mod scalar;
+pub mod traits;
 
 pub use errors::{Base58Error, ConversionError};
