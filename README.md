@@ -1,9 +1,3 @@
-## Safety
-
-`WSTS` has been independently audited and was exercised in production by the [sBTC](https://github.com/stacks-sbtc/sbtc) system. **That is history, and it does not describe this code.** sBTC vendored `wsts` 14.0.0 into its own tree on 2026-03-02 ([sbtc#1938](https://github.com/stacks-sbtc/sbtc/commit/f43fd2d329d408d2be7055f7f4684c4bf42ad131)) and the two implementations have diverged in both directions since. sBTC removed the `v1` module and the bitcoin helpers and reworked polynomial-commitment validation; this crate has taken protocol changes their copy never received. Neither tree's audit or operational history transfers to the other.
-
-Modifying the protocol without a thorough cryptographic review is strongly discouraged and may be insecure.
-
 # WSTS
 
 [![ci](https://github.com/xoloki/wsts/actions/workflows/ci.yml/badge.svg)](https://github.com/xoloki/wsts/actions/workflows/ci.yml)
@@ -16,6 +10,12 @@ First, it is optimized for a small number of rounds in the common case where the
 Second, in contrast to typical ```multisig``` protocols, ```WSTS``` produces a single aggregate signature which is indistinguisable from a standard ```Schnorr``` signature. Crucially, this signature can be verified the same way as any ```Schnorr``` signature.  And since the signature is aggregated, it does not take any more space on chain than any other standard signature, and linearly less than traditional ```multisig``` signatures.
 
 Finally, ```WSTS``` is designed to build aggregate threshold signatures which are weighted, i.e. not all signers control the same number of keys.  The ```threshold``` is a function of keys, so a set of signers meets the ```threshold``` if and only if the sum of the number of keys they control equals or exceeds the ```threshold```.
+
+## Safety
+
+`WSTS` has been independently audited and was exercised in production by the [sBTC](https://github.com/stacks-sbtc/sbtc) system, but that is history and it does not describe this code. sBTC vendored `wsts` 14.0.0 into its own tree on 2026-03-02 ([sbtc#1938](https://github.com/stacks-sbtc/sbtc/commit/f43fd2d329d408d2be7055f7f4684c4bf42ad131)) and the two implementations have diverged in both directions since. sBTC removed the `v1` module and the bitcoin helpers and reworked polynomial-commitment validation; this crate has taken protocol changes their copy never received. Neither tree's audit or operational history transfers to the other.
+
+Modifying the protocol without a thorough cryptographic review is strongly discouraged and may be insecure.
 
 ## Background
 ```WSTS``` is based on [```FROST```](https://eprint.iacr.org/2020/852.pdf), i.e. ```Flexible Round-Optimized Schnorr Threshold``` signatures.  ```FROST``` provides a system where a number of ```parties```, each of which controls a single ```key```, can form an aggregate group signing key, after which a ```threshold``` number of them can cooperate to form a valid ```Schnorr``` signature.
