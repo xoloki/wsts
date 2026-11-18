@@ -64,4 +64,8 @@ let party = Party::new(party_id, &key_ids, num_parties, num_keys, threshold, &mu
 
 The `v1` module is behind the `with_v1` feature and is not built by default; `use wsts::v1::Signer` requires `--features with_v1`.
 
-Ensure that you pass the RNG to all functions that require randomness.
+### Do not replay RNG state
+
+`WSTS` derives signing nonces with the hedged construction from [RFC 9591 section 4.1](https://datatracker.ietf.org/doc/rfc9591): each nonce is the hash of fresh RNG output together with the signer's secret key. The secret key is mixed in so that a poor RNG does not immediately yield a predictable nonce, but the nonce is still a function of the bytes your RNG produces.
+
+So never reuse or replay RNG state across signing rounds. Two rounds that draw the same bytes produce the same nonce, and two Schnorr signatures sharing a nonce reveal the signing key. This is why `create_rng` returns `OsRng` and why the example above seeds from entropy: neither is reproducible, deliberately. If you want a reproducible run, keep it to tests.
