@@ -19,11 +19,18 @@ jobs:
     steps:
       - name: Checkout Repository
         id: checkout_repository
-        uses: stacks-sbtc/actions/checkout@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         id: setup_rust
-        uses: stacks-sbtc/actions/setup-rust-toolchain@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          # Set explicitly rather than inherited: v1 defaulted rustflags to
+          # "-D warnings", v2 defaults it to "" and denies via
+          # CARGO_BUILD_WARNINGS instead, which needs Cargo >= 1.91. Pinning
+          # the mechanism keeps the gate identical across action versions.
+          rustflags: "-D warnings"
+          build-warnings: ""
 
       - name: Cargo Check
         id: cargo_check
@@ -36,11 +43,14 @@ jobs:
     steps:
       - name: Checkout Repository
         id: checkout_repository
-        uses: stacks-sbtc/actions/checkout@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         id: setup_rust
-        uses: stacks-sbtc/actions/setup-rust-toolchain@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: "-D warnings"
+          build-warnings: ""
 
       - name: Cargo Test
         id: cargo_test
@@ -54,13 +64,15 @@ jobs:
     steps:
       - name: Checkout Repository
         id: checkout_repository
-        uses: stacks-sbtc/actions/checkout@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         id: setup_rust
-        uses: stacks-sbtc/actions/setup-rust-toolchain@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           components: rustfmt
+          rustflags: "-D warnings"
+          build-warnings: ""
 
       - name: Cargo Fmt
         id: cargo_fmt
@@ -73,32 +85,60 @@ jobs:
     steps:
       - name: Checkout Repository
         id: checkout_repository
-        uses: stacks-sbtc/actions/checkout@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         id: setup_rust
-        uses: stacks-sbtc/actions/setup-rust-toolchain@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           components: clippy
+          rustflags: "-D warnings"
+          build-warnings: ""
 
       - name: Cargo Clippy
         id: cargo_clippy
         run: |
           cargo clippy --all-targets --all-features -- -D warnings -A clippy::op-ref -A clippy::needless-range-loop
 
-  doc:
-    permissions:
-      contents: read
-      pages: write
+  package:
+    name: package
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         id: checkout_repository
-        uses: stacks-sbtc/actions/checkout@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         id: setup_rust
-        uses: stacks-sbtc/actions/setup-rust-toolchain@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: "-D warnings"
+          build-warnings: ""
+
+      # Exercises the same packaging and verify-build that `cargo publish`
+      # performs, without needing the crates.io environment or a token. This
+      # is where mistakes in required-features, [[bin]] targets or `exclude`
+      # surface, so it gates every PR rather than waiting for a release tag.
+      - name: Cargo Publish Dry Run
+        id: cargo_publish_dry_run
+        run: |
+          cargo publish --dry-run
+
+  doc:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        id: checkout_repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust
+        id: setup_rust
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: "-D warnings"
+          build-warnings: ""
 
       - name: Install LaTeX
         id: install_latex
@@ -110,14 +150,14 @@ jobs:
 
       - name: Upload PDF
         id: upload_pdf
-        uses: stacks-sbtc/actions/upload-artifact@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wsts.pdf
           path: wsts.pdf
 
       - name: Upload Website
         id: upload_website
-        uses: stacks-sbtc/actions/upload-artifact@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: website
           path: ./target/doc/

@@ -5,6 +5,19 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
+  # Lets the publish path be exercised without a tag. This workflow had never
+  # run before, so a release tag would otherwise be both its first execution
+  # and a real upload at the same time. A dispatch with dry_run left at true
+  # covers checkout, toolchain install, the environment approval gate and
+  # secret injection, with the upload disabled.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Package and verify only; do not upload to crates.io"
+        type: boolean
+        required: false
+        default: true
+
 permissions:
   contents: read
 
@@ -15,14 +28,25 @@ jobs:
     steps:
       - name: Checkout Repository
         id: checkout_repository
-        uses: stacks-sbtc/actions/checkout@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
         id: setup_rust
-        uses: stacks-sbtc/actions/setup-rust-toolchain@505c42b153ba2ac261c276e96bc5dc7b68d61039
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: "-D warnings"
+          build-warnings: ""
+
+      # Always runs, including on a real release, so a packaging failure stops
+      # the job before anything is uploaded.
+      - name: Cargo Publish Dry Run
+        id: cargo_publish_dry_run
+        run: |
+          cargo publish --dry-run
 
       - name: Cargo Publish
         id: cargo_publish
+        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
