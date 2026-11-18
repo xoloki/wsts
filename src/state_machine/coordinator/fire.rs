@@ -1620,11 +1620,6 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
         self.config.clone()
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    fn get_config_mut(&mut self) -> &mut Config {
-        &mut self.config
-    }
-
     fn set_coordinator_public_key(&mut self, key: Option<ecdsa::PublicKey>) {
         self.coordinator_public_key = key;
     }

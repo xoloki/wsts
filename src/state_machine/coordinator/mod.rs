@@ -329,10 +329,6 @@ pub trait Coordinator: Clone + Debug + PartialEq + StateMachine<State, Error> {
     /// Retrieve the config
     fn get_config(&self) -> Config;
 
-    /// Retrieve a mutable reference to the config
-    #[cfg(any(test, feature = "testing"))]
-    fn get_config_mut(&mut self) -> &mut Config;
-
     /// Set the coordinator public key
     fn set_coordinator_public_key(&mut self, key: Option<ecdsa::PublicKey>);
 
@@ -645,9 +641,9 @@ pub mod test {
     }
 
     // Eight positional parameters, five of them bare Option<Duration>. The
-    // right fix is to group the timeouts into a struct, but that churns this
-    // exported harness signature for reasons unrelated to retiring
-    // get_config_mut, so it is left as a follow-up.
+    // right fix is to group the timeouts into a struct, but that churns an
+    // exported harness signature for its own reasons, so it is left as a
+    // follow-up rather than bundled in here.
     #[allow(clippy::too_many_arguments)]
     pub fn setup_with_timeouts<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
         num_signers: u32,
