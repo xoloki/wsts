@@ -1,0 +1,7 @@
+# Pinned so that a new stable release cannot turn CI red without a code change.
+# Bumping this is a deliberate PR: raise the channel, then fix whatever new lints
+# the newer clippy reports.
+[toolchain]
+channel = "1.97.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

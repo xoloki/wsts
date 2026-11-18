@@ -1455,7 +1455,7 @@ pub mod test {
         assert_eq!(
             parties, &bad_parties,
             "Expected BadPartySigs from {bad_parties:?}, got {:?}",
-            &operation_results[0]
+            operation_results[0]
         );
     }
 
@@ -1894,7 +1894,7 @@ pub mod test {
         else {
             panic!(
                 "Expected OperationResult::DkgError got {:?}",
-                &operation_results[0]
+                operation_results[0]
             );
         };
         assert_eq!(

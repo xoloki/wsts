@@ -350,15 +350,15 @@ mod test {
         let aggregate_public_key = sig_agg.poly[0];
         println!(
             "sign_verify:  agg_pubkey    {}",
-            &hex::encode(sig_agg.poly[0].compress().as_bytes())
+            hex::encode(sig_agg.poly[0].compress().as_bytes())
         );
-        println!("sign_verify:  agg_pubkey.x  {}", &sig_agg.poly[0].x());
+        println!("sign_verify:  agg_pubkey.x  {}", sig_agg.poly[0].x());
         let tweaked_public_key = compute::tweaked_public_key(&aggregate_public_key, merkle_root);
         println!(
             "sign_verify: tweaked_key    {}",
-            &hex::encode(tweaked_public_key.compress().as_bytes())
+            hex::encode(tweaked_public_key.compress().as_bytes())
         );
-        println!("sign_verify: tweaked_key.x  {}", &tweaked_public_key.x());
+        println!("sign_verify: tweaked_key.x  {}", tweaked_public_key.x());
         let (nonces, sig_shares) = test_helpers::sign(msg, &mut S, &mut rng, merkle_root);
         let proof = match sig_agg.sign_taproot(msg, &nonces, &sig_shares, &[], merkle_root) {
             Err(e) => panic!("Aggregator sign failed: {e:?}"),
