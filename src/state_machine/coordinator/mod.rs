@@ -360,7 +360,7 @@ pub trait Coordinator: Clone + Debug + PartialEq + StateMachine<State, Error> {
     /// Retrieve the current message bytes being signed
     fn get_message(&self) -> Vec<u8>;
 
-    /// Retrive the current state
+    /// Retrieve the current state
     fn get_state(&self) -> State;
 
     /// Trigger a DKG round, with an optional `dkg_id`

@@ -35,7 +35,7 @@ jobs:
       - name: Cargo Check
         id: cargo_check
         run: |
-          cargo check
+          cargo check --locked
 
   test-all:
     name: test-all
@@ -55,8 +55,8 @@ jobs:
       - name: Cargo Test
         id: cargo_test
         run: |
-          cargo test
-          cargo test --features with_v1
+          cargo test --locked
+          cargo test --locked --features with_v1
 
   fmt:
     name: fmt
@@ -98,7 +98,7 @@ jobs:
       - name: Cargo Clippy
         id: cargo_clippy
         run: |
-          cargo clippy --all-targets --all-features -- -D warnings -A clippy::op-ref -A clippy::needless-range-loop
+          cargo clippy --all-targets --all-features -- -D warnings
 
   package:
     name: package
@@ -122,7 +122,7 @@ jobs:
       - name: Cargo Publish Dry Run
         id: cargo_publish_dry_run
         run: |
-          cargo publish --dry-run
+          cargo publish --dry-run --locked
 
   doc:
     permissions:

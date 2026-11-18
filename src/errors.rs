@@ -64,20 +64,14 @@ impl From<TryFromIntError> for AggregatorError {
     }
 }
 
-impl From<EllipticCurveError> for EncryptionError {
-    fn from(e: EllipticCurveError) -> Self {
-        Self::EllipticCurveError(e)
-    }
-}
-
 #[derive(Error, Debug, Clone, PartialEq)]
 /// Errors which can happen during encryption
 pub enum EncryptionError {
     #[error("AES nonce was missing from the buffer")]
-    /// AES nonce was missing from the buffer")]
+    /// AES nonce was missing from the buffer
     MissingNonce,
     #[error("AES data was missing from the buffer")]
-    /// AES data was missing from the buffer")]
+    /// AES data was missing from the buffer
     MissingData,
     #[error("AES GCM error {0:?}")]
     /// Wrapped aes_gcm::Error, an opaque type
@@ -90,5 +84,11 @@ pub enum EncryptionError {
 impl From<AesGcmError> for EncryptionError {
     fn from(e: AesGcmError) -> Self {
         Self::AesGcm(e)
+    }
+}
+
+impl From<EllipticCurveError> for EncryptionError {
+    fn from(e: EllipticCurveError) -> Self {
+        Self::EllipticCurveError(e)
     }
 }

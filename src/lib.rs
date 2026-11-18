@@ -29,10 +29,10 @@ pub mod util;
 #[cfg(feature = "with_v1")]
 #[allow(clippy::op_ref)]
 pub mod v1;
-/// Version 1 of WSTS, which encapsulates a number of parties using vanilla FROST
+/// Version 2 of WSTS, in which each party holds one polynomial and one nonce but may control many keys
 #[allow(clippy::op_ref)]
 pub mod v2;
-/// Shamir secret sharing, using in distributed key generation
+/// Shamir secret sharing, used in distributed key generation
 pub mod vss;
 
 pub use p256k1 as curve;

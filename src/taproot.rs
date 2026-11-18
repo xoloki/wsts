@@ -238,23 +238,14 @@ mod test {
             let P = Point::lift_x(&Q.x()).unwrap();
             let R = Point::lift_x(&proof.r).unwrap();
             let e = compute::challenge(&Q, &R, msg.as_bytes());
-            //let e = c.clone();
             let Rp = proof.s * G - e * P;
             assert!(Rp.has_even_y());
             assert_eq!(Rp.x(), proof.r);
         }
 
-        /*
-        d = Scalar::random(&mut rng);
-        P = d * G;
-        e = Scalar::random(&mut rng);
-        Q = e * G;
-        */
         let S = compute::tweaked_public_key(&P, None);
         println!("S.has_even_y {}", S.has_even_y());
         let t = compute::tweak(&P, None);
-        //let d = if !P.has_even_y() || !S.has_even_y() {
-        //let d = if !S.has_even_y() {
         let d = if !P.has_even_y() { -d + t } else { d + t };
         assert!((d * G).x() == S.x());
         assert!((d * G) == S);
@@ -271,7 +262,6 @@ mod test {
             let P = Point::lift_x(&S.x()).unwrap();
             let R = Point::lift_x(&proof.r).unwrap();
             let e = compute::challenge(&S, &R, msg.as_bytes());
-            //let e = c.clone();
             let Rp = proof.s * G - e * P;
             assert!(Rp.has_even_y());
             assert_eq!(Rp.x(), proof.r);
@@ -281,8 +271,6 @@ mod test {
         let T = compute::tweaked_public_key(&Q, None);
         println!("T.has_even_y {}", T.has_even_y());
         let t = compute::tweak(&Q, None);
-        //let e = if !Q.has_even_y() || !T.has_even_y() {
-        //let e = if !T.has_even_y() {
         let e = if !Q.has_even_y() { -e + t } else { e + t };
         assert!((e * G).x() == T.x());
         assert!((e * G) == T);

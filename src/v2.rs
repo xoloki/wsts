@@ -40,7 +40,7 @@ pub struct Party {
 impl fmt::Debug for Party {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Party")
-            .field("part_id", &self.party_id)
+            .field("party_id", &self.party_id)
             .field("key_ids", &self.key_ids)
             .field("num_keys", &self.num_keys)
             .field("num_parties", &self.num_parties)

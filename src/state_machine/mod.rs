@@ -145,7 +145,7 @@ impl std::fmt::Debug for PublicKeys {
     }
 }
 
-/// State machine for a simple FROST coordinator
+/// State machines for the FROST and FIRE coordinators
 pub mod coordinator;
 
 /// State machine for signers

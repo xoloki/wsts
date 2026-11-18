@@ -1,13 +1,15 @@
-## SAFETY NOTICE
+## Safety
 
-**This crate is only considered safe to use in the specific configuration, parameterization, and protocol flow in which it is used by the sBTC system (https://github.com/stacks-sbtc/sbtc). Using it in any other context, or modifying the protocol without a thorough cryptographic review, is strongly discouraged and may be insecure.**
+`WSTS` has been independently audited and was exercised in production by the [sBTC](https://github.com/stacks-sbtc/sbtc) system. **That is history, and it does not describe this code.** sBTC vendored `wsts` 14.0.0 into its own tree on 2026-03-02 ([sbtc#1938](https://github.com/stacks-sbtc/sbtc/commit/f43fd2d329d408d2be7055f7f4684c4bf42ad131)) and the two implementations have diverged in both directions since. sBTC removed the `v1` module and the bitcoin helpers and reworked polynomial-commitment validation; this crate has taken protocol changes their copy never received. Neither tree's audit or operational history transfers to the other.
+
+Modifying the protocol without a thorough cryptographic review is strongly discouraged and may be insecure.
 
 # WSTS
 
-[![ci](https://github.com/Trust-Machines/wsts/actions/workflows/ci.yml/badge.svg)](https://github.com/Trust-Machines/wsts/actions/workflows/ci.yml)
+[![ci](https://github.com/xoloki/wsts/actions/workflows/ci.yml/badge.svg)](https://github.com/xoloki/wsts/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/wsts.svg)](https://crates.io/crates/wsts)
 
-[```WSTS```](https://tmurl.net/wsts) is a system for making ```Weighted Schnorr Threshold Signatures```, aka ```WileyProofs```.  It allows a group of ```signers```, each of whom controls a set of ```keys```, to make a valid ```Schnorr``` signature, as long as ```T``` (the ```threshold```) of them complete the protocol honestly.  While there are many other threshold signature schemes, ```WSTS``` has several features which make it particularly useful in a cryptocurrency context.
+[```WSTS```](https://wsts.xyz) is a system for making ```Weighted Schnorr Threshold Signatures```, aka ```WileyProofs```.  It allows a group of ```signers```, each of whom controls a set of ```keys```, to make a valid ```Schnorr``` signature, as long as ```T``` (the ```threshold```) of them complete the protocol honestly.  While there are many other threshold signature schemes, ```WSTS``` has several features which make it particularly useful in a cryptocurrency context.
 
 First, it is optimized for a small number of rounds in the common case where there are no byzantine actors present.  Since the protocol allows detection any bad actors in the system, it makes sense to optimize for the case where there are none.  Such byzantine actors can be sanctioned in a way that severely disincentivezes attempts to subvert the protocol.
 
@@ -29,8 +31,8 @@ This crate uses the Bitcoin ```secp256k1``` curve.  But since the C ```libsecp25
 
 ## Documentation
 
-- [wsts crate docs in GitHub](https://stacks-sbtc.github.io/wsts/wsts)
-- [WSTS Paper](https://stacks-sbtc.github.io/wsts/wsts.pdf)
+- [wsts crate docs](https://wsts.xyz/wsts)
+- [WSTS Paper](https://wsts.xyz/wsts.pdf)
 
 ## Copyright and License
 
