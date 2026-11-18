@@ -69,6 +69,7 @@ impl From<[u8; 64]> for SchnorrProof {
 }
 
 /// Helper functions for tests
+#[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     use super::*;
     use crate::{

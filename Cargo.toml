@@ -20,7 +20,7 @@ exclude = [".github/", ".doc/", "CNAME", "coverage.sh", "rust-toolchain.toml"]
 default = ["with_p256k1_bindgen"]
 with_p256k1_bindgen = ["p256k1/with_bindgen"]
 with_v1 = []
-testing = ["dep:bitcoin", "dep:bitcoinconsensus"]
+testing = ["dep:bitcoin", "dep:bitcoinconsensus", "dep:tracing-subscriber"]
 
 [dependencies]
 bitcoin = { version = "0.32", default-features = false, features = ["serde", "rand-std"], optional = true }
@@ -39,22 +39,24 @@ serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 thiserror = "1.0"
 tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 bitcoin = { version = "0.32", default-features = false, features = ["serde", "rand-std"] }
 bitcoinconsensus = { version = "0.106.0", default-features = false }
 criterion = "0.5.1"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 
 [[bench]]
 name = "v1_bench"
-required-features = ["with_v1"]
+required-features = ["with_v1", "testing"]
 harness = false
 
 [[bench]]
 name = "v2_bench"
+required-features = ["testing"]
 harness = false
 
 [lib]

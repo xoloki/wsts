@@ -409,6 +409,7 @@ impl MultiMult for CheckPrivateShares {
 }
 
 /// Helper functions for tests
+#[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     /// Generate a set of `k` vectors which divide `n` IDs evenly
     pub fn gen_signer_ids(n: u32, k: u32) -> Vec<Vec<u32>> {

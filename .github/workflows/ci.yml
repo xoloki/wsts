@@ -57,6 +57,10 @@ jobs:
         run: |
           cargo test --locked
           cargo test --locked --features with_v1
+          # The benches consume test_helpers, which is now behind `testing`, so
+          # both bench targets carry required-features and a bare
+          # `cargo bench --no-run` silently builds neither. Be explicit.
+          cargo bench --no-run --locked --all-features
 
   fmt:
     name: fmt
