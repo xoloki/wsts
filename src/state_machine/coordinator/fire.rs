@@ -2410,6 +2410,7 @@ pub mod test {
                 Some(timeout),
                 Some(timeout),
                 Some(timeout),
+                false,
             );
 
         // Start a DKG round where we will not allow all signers to recv DkgBegin, so they will not respond with DkgPublicShares
@@ -2512,6 +2513,7 @@ pub mod test {
             Some(timeout),
             Some(timeout),
             Some(timeout),
+            false,
         );
 
         // Start a DKG round where we will not allow all signers to recv DkgBegin, so they will not respond with DkgPublicShares
@@ -2718,6 +2720,7 @@ pub mod test {
             Some(timeout),
             Some(timeout),
             Some(timeout),
+            false,
         );
 
         // Start a DKG round where we will not allow all signers to recv DkgBegin, so they will not respond with DkgPublicShares
@@ -3480,6 +3483,7 @@ pub mod test {
                 None,
                 Some(Duration::from_millis(128)),
                 Some(Duration::from_millis(128)),
+                false,
             );
         let config = coordinators.first().unwrap().get_config();
 

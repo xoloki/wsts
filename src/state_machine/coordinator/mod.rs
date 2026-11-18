@@ -606,6 +606,7 @@ pub mod test {
         assert_eq!(coordinator.get_state(), State::NonceGather(signature_type));
     }
 
+    /// Set up coordinators and signers with packet signature verification off.
     pub fn setup<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
         num_signers: u32,
         keys_per_signer: u32,
@@ -618,9 +619,36 @@ pub mod test {
             None,
             None,
             None,
+            false,
         )
     }
 
+    /// Set up coordinators and signers with packet signature verification on.
+    ///
+    /// Verification needs a coordinator public key as well, so callers still
+    /// have to set that; this only decides the flag at construction time, so
+    /// that no mutable accessor is needed afterwards.
+    pub fn setup_verifying<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) -> (Vec<Coordinator>, Vec<Signer<SignerType>>) {
+        setup_with_timeouts::<Coordinator, SignerType>(
+            num_signers,
+            keys_per_signer,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+    }
+
+    // Eight positional parameters, five of them bare Option<Duration>. The
+    // right fix is to group the timeouts into a struct, but that churns this
+    // exported harness signature for reasons unrelated to retiring
+    // get_config_mut, so it is left as a follow-up.
+    #[allow(clippy::too_many_arguments)]
     pub fn setup_with_timeouts<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
         num_signers: u32,
         keys_per_signer: u32,
@@ -629,6 +657,7 @@ pub mod test {
         dkg_end_timeout: Option<Duration>,
         nonce_timeout: Option<Duration>,
         sign_timeout: Option<Duration>,
+        verify_packet_sigs: bool,
     ) -> (Vec<Coordinator>, Vec<Signer<SignerType>>) {
         INIT.call_once(|| {
             tracing_subscriber::registry()
@@ -690,7 +719,7 @@ pub mod test {
                     &mut rng,
                 )
                 .unwrap();
-                signer.verify_packet_sigs = false;
+                signer.verify_packet_sigs = verify_packet_sigs;
                 signer
             })
             .collect::<Vec<Signer<SignerType>>>();
@@ -710,7 +739,7 @@ pub mod test {
                     sign_timeout,
                     public_keys.clone(),
                 );
-                config.verify_packet_sigs = false;
+                config.verify_packet_sigs = verify_packet_sigs;
                 Coordinator::new(config)
             })
             .collect::<Vec<Coordinator>>();
@@ -1096,20 +1125,15 @@ pub mod test {
         Coordinator: CoordinatorTrait,
         SignerType: SignerTrait,
     >() {
-        let (coordinators, mut signers) = setup::<Coordinator, SignerType>(5, 1);
+        let (coordinators, mut signers) = setup_verifying::<Coordinator, SignerType>(5, 1);
         let mut coordinators = vec![coordinators[0].clone()];
 
         for coordinator in coordinators.iter_mut() {
-            let config = coordinator.get_config_mut();
-            config.verify_packet_sigs = true;
-
-            let coordinator_public_key = config.public_keys.signers[&0];
+            let coordinator_public_key = coordinator.get_config().public_keys.signers[&0];
             coordinator.set_coordinator_public_key(Some(coordinator_public_key));
         }
 
         for signer in signers.iter_mut() {
-            signer.verify_packet_sigs = true;
-
             let coordinator_public_key = signer.public_keys.signers[&0];
             signer.coordinator_public_key = Some(coordinator_public_key);
         }
@@ -1245,19 +1269,14 @@ pub mod test {
         Coordinator: CoordinatorTrait,
         SignerType: SignerTrait,
     >() {
-        let (coordinators, mut signers) = setup::<Coordinator, SignerType>(5, 1);
+        let (coordinators, mut signers) = setup_verifying::<Coordinator, SignerType>(5, 1);
         let mut coordinators = vec![coordinators[0].clone()];
 
         for coordinator in coordinators.iter_mut() {
-            let config = coordinator.get_config_mut();
-            config.verify_packet_sigs = true;
-
             coordinator.set_coordinator_public_key(None);
         }
 
         for signer in signers.iter_mut() {
-            signer.verify_packet_sigs = true;
-
             let coordinator_public_key = signer.public_keys.signers[&0];
             signer.coordinator_public_key = Some(coordinator_public_key);
         }
@@ -1286,20 +1305,15 @@ pub mod test {
         Coordinator: CoordinatorTrait,
         SignerType: SignerTrait,
     >() {
-        let (coordinators, mut signers) = setup::<Coordinator, SignerType>(5, 1);
+        let (coordinators, mut signers) = setup_verifying::<Coordinator, SignerType>(5, 1);
         let mut coordinators = vec![coordinators[0].clone()];
 
         for coordinator in coordinators.iter_mut() {
-            let config = coordinator.get_config_mut();
-            config.verify_packet_sigs = true;
-
-            let coordinator_public_key = config.public_keys.signers[&0];
+            let coordinator_public_key = coordinator.get_config().public_keys.signers[&0];
             coordinator.set_coordinator_public_key(Some(coordinator_public_key));
         }
 
         for signer in signers.iter_mut() {
-            signer.verify_packet_sigs = true;
-
             let coordinator_public_key = signer.public_keys.signers[&1];
             signer.coordinator_public_key = Some(coordinator_public_key);
         }
@@ -1328,20 +1342,15 @@ pub mod test {
         Coordinator: CoordinatorTrait,
         SignerType: SignerTrait,
     >() {
-        let (coordinators, mut signers) = setup::<Coordinator, SignerType>(5, 1);
+        let (coordinators, mut signers) = setup_verifying::<Coordinator, SignerType>(5, 1);
         let mut coordinators = vec![coordinators[0].clone()];
 
         for coordinator in coordinators.iter_mut() {
-            let config = coordinator.get_config_mut();
-            config.verify_packet_sigs = true;
-
-            let coordinator_public_key = config.public_keys.signers[&1];
+            let coordinator_public_key = coordinator.get_config().public_keys.signers[&1];
             coordinator.set_coordinator_public_key(Some(coordinator_public_key));
         }
 
         for signer in signers.iter_mut() {
-            signer.verify_packet_sigs = true;
-
             let coordinator_public_key = signer.public_keys.signers[&0];
             signer.coordinator_public_key = Some(coordinator_public_key);
         }
