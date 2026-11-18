@@ -33,7 +33,6 @@ pub fn expand_to_scalar(msg: &[u8], dst: &[u8]) -> Result<Scalar, EllipticCurveE
     Ok(Scalar::from(buf))
 }
 
-#[allow(dead_code)]
 /// Digest the hasher to a Scalar
 pub fn hash_to_scalar(hasher: &mut Sha256) -> Scalar {
     let h = hasher.clone();

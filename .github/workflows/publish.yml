@@ -42,7 +42,7 @@ jobs:
       - name: Cargo Publish Dry Run
         id: cargo_publish_dry_run
         run: |
-          cargo publish --dry-run
+          cargo publish --dry-run --locked
 
       - name: Cargo Publish
         id: cargo_publish
@@ -50,4 +50,4 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cargo publish
+          cargo publish --locked

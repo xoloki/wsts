@@ -403,7 +403,7 @@ As we know from Lagrange interpolation, $\sum_{j_k \in S_k}^{} s_{j_k} \cdot \la
   Performance
 }
 
-The WSTS Rust reference implementation \cite{tmfrost} contains vanilla FROST in the v1 module, and WSTS in the v2 module.  This crate contains criterion benchmarks for both v1 and v2.
+The WSTS Rust reference implementation \cite{wstsimpl} contains vanilla FROST in the v1 module, and WSTS in the v2 module.  This crate contains criterion benchmarks for both v1 and v2.
 
 The results are quite staggering.  When testing DKG with $4$ signers and $20$ keys, v2 outperforms v1 by an order of magnitude: $53 ms$ per DKG round for v1 compared to $8.3 ms$ for v2.  Similar speedups were noted for party signing and group signing.
 
@@ -513,10 +513,10 @@ The author would like to thank Alie Slade for initial work on the WSTS algorithm
   \emph{An Efficient and Secure Weighted Threshold Signcryption Scheme} Journal of Internet Technology, vol. 20, no. 5 , pp. 1523-1534, Sep. 2019
   \texttt{https://jit.ndhu.edu.tw/article/view/2135}
 
-\bibitem{tmfrost}
+\bibitem{wstsimpl}
   Joey Yandle
   \emph{WSTS Reference Implementation}
-  \texttt{https://github.com/Trust-Machines/wsts}
+  \texttt{https://github.com/xoloki/wsts}
 
 \bibitem{roast}
   Tim Ruffing, Viktoria Ronge, Elliott Jin, Jonas Schneider-Bensch, Dominique Schroder
