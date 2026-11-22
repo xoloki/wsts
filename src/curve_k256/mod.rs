@@ -11,8 +11,10 @@
 //! are 32 big-endian bytes and points are SEC1 compressed, both serialized as `serialize_bytes`,
 //! so keys, saved DKG state and network packets written by a `p256k1` build stay readable.
 
+pub mod ecdsa;
 pub mod errors;
 pub mod field;
+pub mod keys;
 pub mod point;
 pub mod scalar;
 pub mod traits;
