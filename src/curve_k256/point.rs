@@ -485,7 +485,7 @@ impl TryFrom<&str> for Compressed {
 #[cfg(test)]
 mod tests {
     use super::{Compressed, Error, Point, G, N};
-    use crate::curve::{field, scalar::Scalar, traits::MultiMult};
+    use crate::curve_k256::{field, scalar::Scalar, traits::MultiMult};
     use num_traits::Zero;
     use p256k1::{
         point::{Compressed as RefCompressed, Point as RefPoint, G as REF_G, N as REF_N},

@@ -196,7 +196,7 @@ impl<'de> Deserialize<'de> for Signature {
 #[cfg(test)]
 mod tests {
     use super::{Error, KeyError, PublicKey, Signature};
-    use crate::curve::scalar::Scalar;
+    use crate::curve_k256::scalar::Scalar;
     use p256k1::{
         ecdsa::{PublicKey as RefPublicKey, Signature as RefSignature},
         scalar::Scalar as RefScalar,
