@@ -50,6 +50,11 @@ pub enum DkgError {
     /// which participant equivocated.
     #[error("DKG public shares digest mismatch from signers {0:?}")]
     DkgPublicSharesMismatch(Vec<u32>),
+    /// Signers acknowledged a different set of DKG private shares than the coordinator accepted.
+    /// As with public shares, the listed signers' views disagree with the coordinator's; this does
+    /// not by itself identify which participant equivocated.
+    #[error("DKG private shares digest mismatch from signers {0:?}")]
+    DkgPrivateSharesMismatch(Vec<u32>),
     /// DKG end failure
     #[error("DKG end failure")]
     DkgEndFailure {

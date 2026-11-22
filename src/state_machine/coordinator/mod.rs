@@ -76,6 +76,9 @@ pub enum Error {
     /// Signers acknowledged a different set of DKG public shares than the coordinator accepted
     #[error("DKG public shares digest mismatch from signers {0:?}")]
     DkgPublicSharesMismatch(Vec<u32>),
+    /// Signers acknowledged a different set of DKG private shares than the coordinator accepted
+    #[error("DKG private shares digest mismatch from signers {0:?}")]
+    DkgPrivateSharesMismatch(Vec<u32>),
     /// SignatureAggregator error
     #[error("Aggregator: {0}")]
     Aggregator(AggregatorError),
@@ -280,6 +283,12 @@ pub struct SavedState {
     pub dkg_public_shares: BTreeMap<u32, DkgPublicShares>,
     /// signers whose DkgPublicSharesDoneAck carried a different public shares digest
     pub dkg_public_shares_mismatched_signer_ids: HashSet<u32>,
+    /// digest of the public shares accepted when DkgPublicSharesDone was sent
+    pub dkg_public_shares_digest: [u8; 32],
+    /// digest of the private shares accepted when DkgPrivateSharesDone was sent
+    pub dkg_private_shares_digest: [u8; 32],
+    /// signers whose DkgPrivateSharesDoneAck carried a different private shares digest
+    pub dkg_private_shares_mismatched_signer_ids: HashSet<u32>,
     /// map of DkgPrivateShares indexed by signer ID
     pub dkg_private_shares: BTreeMap<u32, DkgPrivateShares>,
     /// map of DkgEnd indexed by signer ID
@@ -398,7 +407,7 @@ pub mod test {
         compute,
         curve::{ecdsa, point::Point, point::G, scalar::Scalar},
         errors::AggregatorError,
-        net::{DkgFailure, Message, Packet, SignatureShareResponse, SignatureType},
+        net::{DkgFailure, DkgStatus, Message, Packet, SignatureShareResponse, SignatureType},
         schnorr,
         state_machine::{
             coordinator::{Config, Coordinator as CoordinatorTrait, Error, State},
@@ -2285,5 +2294,168 @@ pub mod test {
             );
             assert_eq!(signer.state, SignerState::Idle);
         }
+    }
+
+    /// A signer that sends one `DkgPrivateShares` to the coordinator and most signers, and to
+    /// `victim` a copy in which the ciphertext for one of the victim's own keys is corrupted (the
+    /// private-shares scenario of #190, under an unchanged key exchange key), must make the round
+    /// abort before `DkgEndBegin`, naming the signer whose view disagrees with the coordinator's.
+    pub fn equivocating_private_shares<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        let (mut coordinators, mut signers) =
+            setup::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let mut rng = create_rng();
+        let equivocator = 0usize;
+        let victim = 1usize;
+
+        // Run the public phase normally, up to the coordinator's DkgPrivateBegin.
+        let dkg_begin = coordinators[0].start_dkg_round(None).unwrap();
+        let (outbound, _) = feedback_messages(&mut coordinators, &mut signers, &[dkg_begin]);
+        let (outbound, results) = feedback_messages(&mut coordinators, &mut signers, &outbound);
+        assert!(results.is_empty());
+        assert_eq!(outbound.len(), 1);
+        let private_begin = outbound[0].clone();
+        assert!(matches!(private_begin.msg, Message::DkgPrivateBegin(_)));
+
+        let mut private_shares = vec![];
+        for signer in signers.iter_mut() {
+            private_shares.extend(
+                signer
+                    .process_inbound_messages(std::slice::from_ref(&private_begin), &mut rng)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(private_shares.len(), signers.len());
+
+        let victim_key_id = signers[victim].signer.get_key_ids()[0];
+        let mut alternate = private_shares[equivocator].clone();
+        let Message::DkgPrivateShares(ref mut msg) = alternate.msg else {
+            panic!("Expected DkgPrivateShares, got {:?}", alternate.msg);
+        };
+        let ciphertext = msg
+            .shares
+            .iter_mut()
+            .find_map(|(_, shares)| shares.get_mut(&victim_key_id))
+            .expect("the equivocator's private shares include the victim's key");
+        ciphertext[0] ^= 1;
+
+        for (i, signer) in signers.iter_mut().enumerate() {
+            let inbound: Vec<Packet> = private_shares
+                .iter()
+                .enumerate()
+                .map(|(j, packet)| {
+                    if i == victim && j == equivocator {
+                        alternate.clone()
+                    } else {
+                        packet.clone()
+                    }
+                })
+                .collect();
+            let outbound = signer.process_inbound_messages(&inbound, &mut rng).unwrap();
+            assert!(outbound.is_empty());
+        }
+
+        let mut done = None;
+        for packet in &private_shares {
+            let (outbound, result) = coordinators[0].process(packet).unwrap();
+            assert!(result.is_none());
+            if outbound.is_some() {
+                done = outbound;
+            }
+        }
+        let done = done.expect("coordinator should send DkgPrivateSharesDone");
+        assert!(matches!(done.msg, Message::DkgPrivateSharesDone(_)));
+
+        let mut acks = vec![];
+        for signer in signers.iter_mut() {
+            acks.extend(
+                signer
+                    .process_inbound_messages(std::slice::from_ref(&done), &mut rng)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(acks.len(), signers.len());
+
+        let mut results = vec![];
+        for ack in &acks {
+            let (outbound, result) = coordinators[0].process(ack).unwrap();
+            assert!(outbound.is_none(), "no DkgEndBegin may be sent");
+            results.extend(result);
+        }
+        assert_eq!(results.len(), 1);
+        let OperationResult::DkgError(DkgError::DkgPrivateSharesMismatch(signer_ids)) = &results[0]
+        else {
+            panic!(
+                "Expected DkgError::DkgPrivateSharesMismatch, got {:?}",
+                results[0]
+            );
+        };
+        assert_eq!(signer_ids, &vec![signers[victim].signer_id]);
+        assert_eq!(coordinators[0].get_state(), State::Idle);
+    }
+
+    /// Signers must refuse to complete DKG when the coordinator's `DkgEndBegin` echoes a private
+    /// shares digest that differs from their own, and the coordinator must report the refusals
+    /// without treating the refusing signers as malicious.
+    pub fn end_begin_digest_mismatch<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        let (mut coordinators, mut signers) =
+            setup::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let mut rng = create_rng();
+
+        let dkg_begin = coordinators[0].start_dkg_round(None).unwrap();
+        let mut outbound = vec![dkg_begin];
+        for _ in 0..4 {
+            let (next, results) = feedback_messages(&mut coordinators, &mut signers, &outbound);
+            assert!(results.is_empty());
+            outbound = next;
+        }
+        assert_eq!(outbound.len(), 1);
+
+        let mut end_begin = outbound[0].clone();
+        let Message::DkgEndBegin(ref mut msg) = end_begin.msg else {
+            panic!("Expected DkgEndBegin, got {:?}", end_begin.msg);
+        };
+        msg.private_shares_digest[0] ^= 1;
+
+        let mut dkg_ends = vec![];
+        for signer in signers.iter_mut() {
+            let outbound = signer
+                .process_inbound_messages(std::slice::from_ref(&end_begin), &mut rng)
+                .unwrap();
+            assert_eq!(outbound.len(), 1);
+            let Message::DkgEnd(ref dkg_end) = outbound[0].msg else {
+                panic!("Expected DkgEnd, got {:?}", outbound[0].msg);
+            };
+            assert_eq!(
+                dkg_end.status,
+                DkgStatus::Failure(DkgFailure::PrivateSharesDigestMismatch)
+            );
+            assert_eq!(signer.state, SignerState::Idle);
+            dkg_ends.extend(outbound);
+        }
+
+        let mut results = vec![];
+        for dkg_end in &dkg_ends {
+            let (_, result) = coordinators[0].process(dkg_end).unwrap();
+            results.extend(result);
+        }
+        assert_eq!(results.len(), 1);
+        let OperationResult::DkgError(DkgError::DkgEndFailure {
+            reported_failures,
+            malicious_signers,
+        }) = &results[0]
+        else {
+            panic!("Expected DkgError::DkgEndFailure, got {:?}", results[0]);
+        };
+        assert_eq!(reported_failures.len(), signers.len());
+        assert!(reported_failures
+            .values()
+            .all(|failure| matches!(failure, DkgFailure::PrivateSharesDigestMismatch)));
+        assert!(malicious_signers.is_empty());
     }
 }

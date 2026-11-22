@@ -19,11 +19,11 @@ use crate::{
     },
     errors::{DkgError, EncryptionError},
     net::{
-        dkg_public_shares_digest, BadPrivateShare, DkgBegin, DkgEnd, DkgEndBegin, DkgFailure,
-        DkgPrivateBegin, DkgPrivateShares, DkgPrivateSharesDone, DkgPrivateSharesDoneAck,
-        DkgPublicShares, DkgPublicSharesDone, DkgPublicSharesDoneAck, DkgStatus, Message,
-        NonceRequest, NonceResponse, Packet, SignatureShareRequest, SignatureShareResponse,
-        SignatureType,
+        dkg_private_shares_digest, dkg_public_shares_digest, BadPrivateShare, DkgBegin, DkgEnd,
+        DkgEndBegin, DkgFailure, DkgPrivateBegin, DkgPrivateShares, DkgPrivateSharesDone,
+        DkgPrivateSharesDoneAck, DkgPublicShares, DkgPublicSharesDone, DkgPublicSharesDoneAck,
+        DkgStatus, Message, NonceRequest, NonceResponse, Packet, SignatureShareRequest,
+        SignatureShareResponse, SignatureType,
     },
     state_machine::{PublicKeys, StateMachine},
     traits::{Signer as SignerTrait, SignerState as SignerSavedState},
@@ -584,6 +584,22 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             }));
         };
 
+        // Refuse to compute key shares unless the coordinator accepted the same private shares we
+        // did.  An honest coordinator aborts before this point on any mismatch, so a mismatch here
+        // means the coordinator is faulty or equivocating; report it rather than completing DKG.
+        if dkg_end_begin.private_shares_digest != self.private_shares_digest() {
+            warn!(
+                signer_id = %self.signer_id,
+                dkg_id = %self.dkg_id,
+                "DkgEndBegin private_shares_digest does not match our accepted private shares, not completing DKG"
+            );
+            return Ok(Message::DkgEnd(DkgEnd {
+                dkg_id: self.dkg_id,
+                signer_id: self.signer_id,
+                status: DkgStatus::Failure(DkgFailure::PrivateSharesDigestMismatch),
+            }));
+        }
+
         // fist check to see if dkg_threshold has been met
         let signer_ids_set: HashSet<u32> = dkg_end_begin
             .signer_ids
@@ -957,6 +973,11 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
         dkg_public_shares_digest(self.dkg_id, &self.dkg_public_shares)
     }
 
+    /// Digest of the private shares this signer has accepted for the current DKG round
+    fn private_shares_digest(&self) -> [u8; 32] {
+        dkg_private_shares_digest(self.dkg_id, &self.dkg_private_shares)
+    }
+
     fn dkg_public_shares_done(&mut self, msg: &DkgPublicSharesDone) -> Result<Vec<Message>, Error> {
         if msg.dkg_id != self.dkg_id {
             warn!(
@@ -1064,6 +1085,7 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             let ack = DkgPrivateSharesDoneAck {
                 dkg_id: self.dkg_id,
                 signer_id: self.signer_id,
+                private_shares_digest: self.private_shares_digest(),
             };
             self.move_to(State::DkgPrivateSharesDoneAck)?;
             Ok(vec![Message::DkgPrivateSharesDoneAck(ack)])
@@ -1463,6 +1485,7 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
                 let ack = DkgPrivateSharesDoneAck {
                     dkg_id: self.dkg_id,
                     signer_id: self.signer_id,
+                    private_shares_digest: self.private_shares_digest(),
                 };
                 self.move_to(State::DkgPrivateSharesDoneAck)?;
                 return Ok(vec![Message::DkgPrivateSharesDoneAck(ack)]);
@@ -2050,6 +2073,7 @@ pub mod test {
             dkg_id: 1,
             signer_ids: vec![0],
             key_ids: vec![],
+            private_shares_digest: dkg_private_shares_digest(1, &signer.dkg_private_shares),
         };
         let _ = signer
             .dkg_end_begin(&dkg_end_begin)
