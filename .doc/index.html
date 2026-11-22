@@ -1,9 +1,320 @@
 <!DOCTYPE html>
-<html>
-  <body>
-    <ul>
-        <li>WSTS API documentation: <a href="./wsts/">this link</a>,</li>
-        <li>Whitepaper: <a href="./wsts.pdf">wsts.pdf</a>.</li>
-    </ul>
-  </body>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weighted Schnorr Threshold Signatures</title>
+<meta name="description" content="WSTS produces a single Schnorr signature from a set of signers holding different numbers of keys. A FROST extension for secp256k1, in Rust.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<style>
+  :root {
+    --ground:      #f2f5f6;
+    --surface:     #ffffff;
+    --ink:         #0e1619;
+    --muted:       #52676e;
+    --accent:      #0b6b68;
+    --accent-soft: #e2efee;
+    --rule:        #dbe3e5;
+    --ok:          #1f7a4d;
+    --no:          #a1402e;
+
+    --display: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    --body:    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0b1013;
+      --surface:     #121b1e;
+      --ink:         #e6eef0;
+      --muted:       #90a7ae;
+      --accent:      #5bd0c0;
+      --accent-soft: #11302e;
+      --rule:        #223034;
+      --ok:          #5fbd8a;
+      --no:          #e0917e;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0b1013;
+    --surface:     #121b1e;
+    --ink:         #e6eef0;
+    --muted:       #90a7ae;
+    --accent:      #5bd0c0;
+    --accent-soft: #11302e;
+    --rule:        #223034;
+    --ok:          #5fbd8a;
+    --no:          #e0917e;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 1rem;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding-inline: 1.5rem;
+    padding-block: clamp(3rem, 9vw, 6rem) 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4rem;
+  }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 1.25rem;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(2rem, 6.5vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .acronym { color: var(--accent); }
+
+  .lede {
+    font-size: 1.125rem;
+    color: var(--muted);
+    margin: 1.25rem 0 0;
+    max-width: 34rem;
+  }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  h3 {
+    font-family: var(--display);
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0 0 0.4rem;
+  }
+
+  p { margin: 0; }
+
+  /* The weighted threshold, as arithmetic. This is the thing that distinguishes
+     WSTS from FROST, so it leads. */
+  .figure {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.875rem;
+    font-variant-numeric: tabular-nums;
+    overflow-x: auto;
+  }
+
+  .figure-caption {
+    font-family: var(--body);
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  .signers { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.25rem; }
+
+  .signer {
+    border: 1px solid var(--rule);
+    padding: 0.35rem 0.6rem;
+    white-space: nowrap;
+  }
+  .signer b { font-weight: 500; color: var(--accent); }
+
+  .sums { display: flex; flex-direction: column; gap: 0.5rem; }
+  .sum { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: baseline; }
+  .sum .verdict { font-weight: 500; }
+  .sum .yes { color: var(--ok); }
+  .sum .nope { color: var(--no); }
+
+  .links { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; }
+
+  .link {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 1.25rem;
+    text-decoration: none;
+    color: var(--ink);
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  .link:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .link .label { font-family: var(--mono); font-size: 0.75rem; color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; }
+  .link h3 { margin: 0.5rem 0 0.35rem; }
+  .link p { font-size: 0.875rem; color: var(--muted); }
+
+  .props { display: flex; flex-direction: column; gap: 1.75rem; }
+  .prop p { color: var(--muted); font-size: 0.9375rem; max-width: 36rem; }
+
+  .variants { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1.75rem; }
+  .variant code { font-family: var(--mono); font-size: 0.8125rem; color: var(--accent); }
+  .variant p { color: var(--muted); font-size: 0.9375rem; margin-top: 0.35rem; }
+
+  .safety { font-size: 0.9375rem; color: var(--muted); max-width: 36rem; }
+  .safety strong { color: var(--ink); font-weight: 500; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    align-items: baseline;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+  footer .spacer { flex: 1 1 auto; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <p class="eyebrow">secp256k1 &middot; Rust &middot; FROST extension</p>
+    <h1><span class="acronym">WSTS</span> &mdash; Weighted Schnorr Threshold Signatures</h1>
+    <p class="lede">A group of signers, each holding a different number of keys, produces one
+      aggregate signature that verifies as an ordinary Schnorr signature.</p>
+  </header>
+
+  <section>
+    <h2>The threshold counts keys, not signers</h2>
+    <div class="figure">
+      <div class="signers">
+        <span class="signer">s&#8321; <b>4</b> keys</span>
+        <span class="signer">s&#8322; <b>1</b></span>
+        <span class="signer">s&#8323; <b>7</b></span>
+        <span class="signer">s&#8324; <b>2</b></span>
+        <span class="signer">N = <b>14</b></span>
+        <span class="signer">T = <b>10</b></span>
+      </div>
+      <div class="sums">
+        <div class="sum">
+          <span>{s&#8321;, s&#8323;}</span><span>4 + 7 = 11 &ge; 10</span>
+          <span class="verdict yes">&#10003; two signers can sign</span>
+        </div>
+        <div class="sum">
+          <span>{s&#8321;, s&#8322;, s&#8324;}</span><span>4 + 1 + 2 = 7 &lt; 10</span>
+          <span class="verdict nope">&#10007; three cannot</span>
+        </div>
+      </div>
+      <p class="figure-caption">A set of signers meets the threshold when the keys they control
+        sum to at least <span style="font-family:var(--mono)">T</span>. Weight follows stake, so
+        the signing set is not a headcount.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Read</h2>
+    <div class="links">
+      <a class="link" href="./wsts/">
+        <span class="label">Rustdoc</span>
+        <h3>API documentation</h3>
+        <p>Every module, including <span style="font-family:var(--mono)">v1</span> and the test
+          helpers.</p>
+      </a>
+      <a class="link" href="./wsts.pdf">
+        <span class="label">PDF</span>
+        <h3>Whitepaper</h3>
+        <p>The construction and its security argument. Joseph Wiley Yandle, 2023.</p>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Why it is built this way</h2>
+    <div class="props">
+      <div class="prop">
+        <h3>One signature, indistinguishable from any other</h3>
+        <p>The aggregate is a standard Schnorr signature and verifies the same way. It costs no
+          more space on chain than a single-signer signature, and linearly less than a
+          traditional multisig.</p>
+      </div>
+      <div class="prop">
+        <h3>Optimised for the honest case</h3>
+        <p>The protocol detects misbehaviour and identifies who is responsible, so the common
+          path assumes no byzantine actors and runs in few rounds. Bad actors can then be
+          sanctioned, which is what makes that assumption safe to optimise for.</p>
+      </div>
+      <div class="prop">
+        <h3>Weighting is in the construction, not bolted on</h3>
+        <p>Keys are the unit of weight throughout key generation and signing, rather than being
+          emulated by giving one participant several identities.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Two variants</h2>
+    <div class="variants">
+      <div class="variant">
+        <h3><code>v1</code></h3>
+        <p>A direct extension of FROST: each signer controls a set of parties, and each party one
+          key. Simple to follow and to audit.</p>
+      </div>
+      <div class="variant">
+        <h3><code>v2</code></h3>
+        <p>One polynomial and one nonce per party, with a party controlling many keys. Reduces
+          DKG and signing traffic by an order of magnitude at scale.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Before you use it</h2>
+    <p class="safety"><strong>Read the safety notice.</strong> WSTS has been independently
+      audited and ran in production under sBTC, but sBTC vendored version 14.0.0 in March 2026
+      and the two trees have diverged in both directions since. Neither tree's audit or
+      operational history transfers to the other. Modifying the protocol without a thorough
+      cryptographic review may be insecure.</p>
+  </section>
+
+  <footer>
+    <a href="https://github.com/xoloki/wsts">github.com/xoloki/wsts</a>
+    <a href="https://crates.io/crates/wsts">crates.io/crates/wsts</a>
+    <span class="spacer"></span>
+    <span>Apache-2.0</span>
+  </footer>
+
+</div>
+</body>
 </html>
