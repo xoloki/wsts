@@ -158,21 +158,21 @@ We call this $\lambda_i$, and use it to quickly evaluate $L(0)$ when given a set
 
 A Schnorr proof \cite{schnorr} is a zero knowledge proof of ownership of a public key.  Let scalar $x$ be a private key, with point $X = x \cdot G$ the corresponding public key.  To prove knowledge of $x$ given $X$, Schnorr proofs use a $3$-move commitment-challenge-response protocol, i.e. a Sigma protocol.
 
-The prover first commits to a random scalar $v$ with the corresponding point $V$, then sends $V$ to the verifier.  The verifier then returns a random challenge scalar $c$.  The prover then constructs the response $r = v + cx$.  The proof consists of the tuple $(r, c, V)$.
+The prover first commits to a random scalar $r$ with the corresponding point $R = r \cdot G$, then sends $R$ to the verifier.  The verifier then returns a random challenge scalar $c$.  The prover then constructs the response $s = r + cx$.  The proof consists of the pair $(R, s)$.
 
 To verify the proof, check that:
-\begin{align}
-  V = r \cdot G - c \cdot X
+\begin{align}\label{equation:schnorr-verify}
+  s \cdot G = R + c \cdot X
 \end{align}
 
 This must be true for a valid proof, since:
 \begin{align}
-  V &= v \cdot G = (r - cx) \cdot G = r \cdot G - cx \cdot G = r \cdot G - c \cdot X\nonumber
+  s \cdot G &= (r + cx) \cdot G = r \cdot G + cx \cdot G = R + c \cdot X\nonumber
 \end{align}
 
-To make this protocol non-interactive, use the Fiat-Shamir transform \cite{fiatshamir} to construct $c$ by hashing the initial proof elements $(G, X, V)$:
-\begin{align}
-  c = H(G, X, V)
+To make this protocol non-interactive, use the Fiat-Shamir transform \cite{fiatshamir} to construct $c$ by hashing the initial proof elements $(G, X, R)$:
+\begin{align}\label{equation:schnorr-challenge}
+  c = H(G, X, R)
 \end{align}
 
 \subsection{
@@ -277,9 +277,9 @@ If $R = R'$, the proof is valid.
   FROST as a Schnorr Proof
 }\label{section:frost-schnorr}
 
-How does the FROST algorithm produce a Schnorr proof?  To do so, it should first commit to some randomness $v$ via $V$, produce a challenge that depends on $V$, and then give a response that combines the commitment $v$, challenge $c$, and underlying secret $x$: $r = v + cx$.
+How does the FROST algorithm produce a Schnorr proof?  To do so, it should first commit to some randomness $r$ via $R$, produce a challenge that depends on $R$, and then give a response that combines the commitment $r$, challenge $c$, and underlying secret $x$: $s = r + cx$.
 
-This is exactly what FROST does.  The committed values are the nonces $(d_i, e_i)$, shared as $(D_i, E_i)$, and aggregated into the sum $R$, which is used to construct the challenge.  And if we expand the aggregation of the party signatures $z_i$, we can see that the response, the signature $z$, is indeed $v + cx$:
+This is exactly what FROST does.  The committed values are the nonces $(d_i, e_i)$, shared as $(D_i, E_i)$, and aggregated into the sum $R$, which is used to construct the challenge.  And if we expand the aggregation of the party signatures $z_i$, we can see that the response, the signature $z$, is indeed $r + cx$:
 \begin{align}
   z = \sum_{i \in S}^{} z_i = \sum_{i \in S}^{} d_i + \rho_i \cdot e_i + s_i \cdot c \cdot \lambda_i = \sum_{i \in S}^{} (d_i + \rho_i \cdot e_i) + c \cdot \sum_{i \in S}^{}(s_i \cdot \lambda_i)\nonumber
 \end{align}
@@ -404,7 +404,7 @@ If $R = R'$, the proof is valid.
   WSTS as a Schnorr Proof
 }\label{section:wsts-schnorr}
 
-WSTS constructs a Schnorr proof in the same way as FROST, with the same commitment value and challenge.  The response, the signature $z$, likewise expands to $v + cx$:
+WSTS constructs a Schnorr proof in the same way as FROST, with the same commitment value and challenge.  The response, the signature $z$, likewise expands to $r + cx$:
 \begin{align}
   z = \sum_{i_p \in S_p}^{} z_{i_p} = \sum_{i_p \in S_p}^{} d_{i_p} + \rho_{i_p} \cdot e_{i_p} + \sum_{j_k \in K_{i_p}}^{} s_{j_k} \cdot c \cdot \lambda_{j_k} = \sum_{i_p \in S_p}^{} (d_{i_p} + \rho_{i_p} \cdot e_{i_p}) + c \cdot \sum_{j_k \in S_k}^{} (s_{j_k} \cdot \lambda_{j_k})\nonumber
 \end{align}
