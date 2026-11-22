@@ -45,6 +45,11 @@ pub enum DkgError {
     /// DKG end timeout
     #[error("DKG end timeout, waiting for {0:?}")]
     DkgEndTimeout(Vec<u32>),
+    /// Signers acknowledged a different set of DKG public shares than the coordinator accepted.
+    /// The listed signers' views disagree with the coordinator's; this does not by itself identify
+    /// which participant equivocated.
+    #[error("DKG public shares digest mismatch from signers {0:?}")]
+    DkgPublicSharesMismatch(Vec<u32>),
     /// DKG end failure
     #[error("DKG end failure")]
     DkgEndFailure {

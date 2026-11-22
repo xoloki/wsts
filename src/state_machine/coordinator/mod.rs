@@ -73,6 +73,9 @@ pub enum Error {
     /// A malicious signer sent the received message
     #[error("Malicious signer {0}")]
     MaliciousSigner(u32),
+    /// Signers acknowledged a different set of DKG public shares than the coordinator accepted
+    #[error("DKG public shares digest mismatch from signers {0:?}")]
+    DkgPublicSharesMismatch(Vec<u32>),
     /// SignatureAggregator error
     #[error("Aggregator: {0}")]
     Aggregator(AggregatorError),
@@ -275,6 +278,8 @@ pub struct SavedState {
     pub current_sign_iter_id: u64,
     /// map of DkgPublicShares indexed by signer ID
     pub dkg_public_shares: BTreeMap<u32, DkgPublicShares>,
+    /// signers whose DkgPublicSharesDoneAck carried a different public shares digest
+    pub dkg_public_shares_mismatched_signer_ids: HashSet<u32>,
     /// map of DkgPrivateShares indexed by signer ID
     pub dkg_private_shares: BTreeMap<u32, DkgPrivateShares>,
     /// map of DkgEnd indexed by signer ID
@@ -397,7 +402,7 @@ pub mod test {
         schnorr,
         state_machine::{
             coordinator::{Config, Coordinator as CoordinatorTrait, Error, State},
-            signer::{Error as SignerError, Signer},
+            signer::{Error as SignerError, Signer, State as SignerState},
             DkgError, Error as StateMachineError, OperationResult, PublicKeys, SignError,
             StateMachine,
         },
@@ -2153,5 +2158,132 @@ pub mod test {
         unsigned
             .verify_witness(&secp, witness, merkle_root)
             .expect("signature verification failed");
+    }
+
+    /// A signer that sends one valid `DkgPublicShares` to the coordinator and most signers, and a
+    /// different valid one to `victim`, must make the round abort before any private shares are
+    /// sent, naming the signer whose view disagrees with the coordinator's.
+    pub fn equivocating_public_shares<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        let (mut coordinators, mut signers) =
+            setup::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let mut rng = create_rng();
+        let equivocator = 0usize;
+        let victim = 1usize;
+
+        let dkg_begin = coordinators[0].start_dkg_round(None).unwrap();
+
+        // A second instance of the equivocating signer produces a different, independently valid
+        // set of public shares for the same round.
+        let mut equivocator_twin = signers[equivocator].clone();
+        let alternate = equivocator_twin
+            .process_inbound_messages(std::slice::from_ref(&dkg_begin), &mut rng)
+            .unwrap();
+        assert_eq!(alternate.len(), 1);
+
+        let mut public_shares = vec![];
+        for signer in signers.iter_mut() {
+            public_shares.extend(
+                signer
+                    .process_inbound_messages(std::slice::from_ref(&dkg_begin), &mut rng)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(public_shares.len(), signers.len());
+        assert_ne!(public_shares[equivocator].msg, alternate[0].msg);
+
+        // Everyone but the victim sees the equivocator's first message; the victim sees the second.
+        for (i, signer) in signers.iter_mut().enumerate() {
+            let inbound: Vec<Packet> = public_shares
+                .iter()
+                .enumerate()
+                .map(|(j, packet)| {
+                    if i == victim && j == equivocator {
+                        alternate[0].clone()
+                    } else {
+                        packet.clone()
+                    }
+                })
+                .collect();
+            let outbound = signer.process_inbound_messages(&inbound, &mut rng).unwrap();
+            assert!(outbound.is_empty());
+        }
+
+        let mut done = None;
+        for packet in &public_shares {
+            let (outbound, result) = coordinators[0].process(packet).unwrap();
+            assert!(result.is_none());
+            if outbound.is_some() {
+                done = outbound;
+            }
+        }
+        let done = done.expect("coordinator should send DkgPublicSharesDone");
+        assert!(matches!(done.msg, Message::DkgPublicSharesDone(_)));
+
+        let mut acks = vec![];
+        for signer in signers.iter_mut() {
+            acks.extend(
+                signer
+                    .process_inbound_messages(std::slice::from_ref(&done), &mut rng)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(acks.len(), signers.len());
+
+        let mut results = vec![];
+        for ack in &acks {
+            let (outbound, result) = coordinators[0].process(ack).unwrap();
+            assert!(outbound.is_none(), "no DkgPrivateBegin may be sent");
+            results.extend(result);
+        }
+        assert_eq!(results.len(), 1);
+        let OperationResult::DkgError(DkgError::DkgPublicSharesMismatch(signer_ids)) = &results[0]
+        else {
+            panic!(
+                "Expected DkgError::DkgPublicSharesMismatch, got {:?}",
+                results[0]
+            );
+        };
+        assert_eq!(signer_ids, &vec![signers[victim].signer_id]);
+        assert_eq!(coordinators[0].get_state(), State::Idle);
+    }
+
+    /// Signers must not send private shares when the coordinator's `DkgPrivateBegin` echoes a
+    /// public shares digest that differs from their own, e.g. a coordinator that skipped the ack
+    /// comparison or is equivocating.
+    pub fn private_begin_digest_mismatch<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        let (mut coordinators, mut signers) =
+            setup::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let mut rng = create_rng();
+
+        let dkg_begin = coordinators[0].start_dkg_round(None).unwrap();
+        let (outbound, _) = feedback_messages(&mut coordinators, &mut signers, &[dkg_begin]);
+        let (outbound, results) = feedback_messages(&mut coordinators, &mut signers, &outbound);
+        assert!(results.is_empty());
+        assert_eq!(outbound.len(), 1);
+
+        let mut private_begin = outbound[0].clone();
+        let Message::DkgPrivateBegin(ref mut msg) = private_begin.msg else {
+            panic!("Expected DkgPrivateBegin, got {:?}", private_begin.msg);
+        };
+        msg.public_shares_digest[0] ^= 1;
+
+        for signer in signers.iter_mut() {
+            let outbound = signer
+                .process_inbound_messages(std::slice::from_ref(&private_begin), &mut rng)
+                .unwrap();
+            assert!(
+                outbound.is_empty(),
+                "signer {} sent {:?} despite a digest mismatch",
+                signer.signer_id,
+                outbound
+            );
+            assert_eq!(signer.state, SignerState::Idle);
+        }
     }
 }
