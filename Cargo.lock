@@ -2250,6 +2250,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "wnaf",
 ]
 
 [[package]]
