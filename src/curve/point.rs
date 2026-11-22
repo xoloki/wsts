@@ -3,6 +3,7 @@
 use core::{
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     hash::{Hash, Hasher},
+    iter::Sum,
     ops::{Add, AddAssign, Mul, Neg, Sub},
 };
 
@@ -395,6 +396,18 @@ impl Neg for &Point {
     }
 }
 
+impl Sum<Point> for Point {
+    fn sum<I: Iterator<Item = Point>>(iter: I) -> Self {
+        iter.fold(Point::identity(), |acc, i| acc + i)
+    }
+}
+
+impl<'a> Sum<&'a Point> for Point {
+    fn sum<I: Iterator<Item = &'a Point>>(iter: I) -> Self {
+        iter.fold(Point::identity(), |acc, i| acc + i)
+    }
+}
+
 impl Mul<Scalar> for Point {
     type Output = Point;
 
@@ -472,7 +485,7 @@ impl TryFrom<&str> for Compressed {
 #[cfg(test)]
 mod tests {
     use super::{Compressed, Error, Point, G, N};
-    use crate::curve_k256::{field, scalar::Scalar, traits::MultiMult};
+    use crate::curve::{field, scalar::Scalar, traits::MultiMult};
     use num_traits::Zero;
     use p256k1::{
         point::{Compressed as RefCompressed, Point as RefPoint, G as REF_G, N as REF_N},

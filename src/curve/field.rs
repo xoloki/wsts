@@ -330,6 +330,14 @@ impl Neg for Element {
     }
 }
 
+impl Neg for &Element {
+    type Output = Element;
+
+    fn neg(self) -> Element {
+        -*self
+    }
+}
+
 /// Exponentiation, spelled `^` as the libsecp256k1 backend spelled it.
 impl BitXor for Element {
     type Output = Element;
@@ -366,7 +374,7 @@ impl BitXor<&Element> for &Element {
 #[cfg(test)]
 mod tests {
     use super::{Element, P};
-    use crate::curve_k256::point::{Point, G};
+    use crate::curve::point::{Point, G};
     use num_traits::{One, Zero};
     use p256k1::field::Element as Ref;
     use rand_core::{RngCore, SeedableRng};
@@ -532,7 +540,7 @@ mod tests {
         // are not on the curve and must not.
         let mut xs: Vec<Element> = vec![G.x()];
         for b in samples(24) {
-            xs.push(Point::from(crate::curve_k256::scalar::Scalar::from(b)).x());
+            xs.push(Point::from(crate::curve::scalar::Scalar::from(b)).x());
             xs.push(Element::from(b));
         }
 

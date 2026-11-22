@@ -3,6 +3,7 @@
 use core::{
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     hash::{Hash, Hasher},
+    iter::Sum,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
@@ -327,6 +328,26 @@ impl Neg for Scalar {
         Scalar {
             scalar: -self.scalar,
         }
+    }
+}
+
+impl Neg for &Scalar {
+    type Output = Scalar;
+
+    fn neg(self) -> Scalar {
+        -*self
+    }
+}
+
+impl Sum<Scalar> for Scalar {
+    fn sum<I: Iterator<Item = Scalar>>(iter: I) -> Self {
+        iter.fold(Scalar::zero(), |acc, i| acc + i)
+    }
+}
+
+impl<'a> Sum<&'a Scalar> for Scalar {
+    fn sum<I: Iterator<Item = &'a Scalar>>(iter: I) -> Self {
+        iter.fold(Scalar::zero(), |acc, i| acc + i)
     }
 }
 

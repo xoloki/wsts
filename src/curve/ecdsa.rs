@@ -58,7 +58,7 @@ impl Signature {
     /// backend's default nonce function did, so the same key and digest give the same signature
     /// under either backend.
     ///
-    /// `hash` must be exactly [`PREHASH_LEN`] bytes. The libsecp256k1 backend took a slice but
+    /// `hash` must be exactly 32 bytes. The libsecp256k1 backend took a slice but
     /// passed only its pointer to a function that reads 32 bytes unconditionally, so a shorter
     /// digest read past the end; this rejects it instead.
     pub fn new(hash: &[u8], sec_key: &Scalar) -> Result<Self, Error> {
@@ -196,7 +196,7 @@ impl<'de> Deserialize<'de> for Signature {
 #[cfg(test)]
 mod tests {
     use super::{Error, KeyError, PublicKey, Signature};
-    use crate::curve_k256::scalar::Scalar;
+    use crate::curve::scalar::Scalar;
     use p256k1::{
         ecdsa::{PublicKey as RefPublicKey, Signature as RefSignature},
         scalar::Scalar as RefScalar,

@@ -184,7 +184,7 @@ impl Party {
         }
 
         // batch verification requires that we multiply each term by a random scalar in order to
-        // prevent a bypass attack.  Doing this using p256k1's MultiMult trait is problematic,
+        // prevent a bypass attack.  Doing this using the MultiMult trait is problematic,
         // because it needs to have every term available so it can return references to them,
         // so we wouldn't be able to save any memory since we'd have to multiple each polynomial
         // coefficient by a different random scalar.
