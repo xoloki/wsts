@@ -3,9 +3,10 @@ use std::collections::BTreeMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    common::{PolyCommitment, PublicNonce, Signature, SignatureShare},
+    common::{check_public_shares, PolyCommitment, PublicNonce, Signature, SignatureShare},
     compute,
     curve::{ecdsa, point::Point},
+    errors::AggregatorError,
     net::{
         DkgBegin, DkgEnd, DkgEndBegin, DkgPrivateBegin, DkgPrivateShares, DkgPrivateSharesDone,
         DkgPublicShares, DkgPublicSharesDone, DkgStatus, Message, NonceRequest, NonceResponse,
@@ -334,6 +335,28 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 return Ok(());
             }
 
+            // Validate before caching anything. These commitments are cached here, at receipt,
+            // and a round that later fails leaves the cache in place: nothing clears it and the
+            // previous round's aggregate key persists. A malformed commitment that got this far
+            // would then be indexed by `aggregator.init` during share aggregation, which reads
+            // poly[i] for i < threshold and panics on a short or empty vector. Rejecting the
+            // whole message keeps that out of the cache entirely.
+            let threshold: usize = self
+                .config
+                .threshold
+                .try_into()
+                .map_err(Error::TryFromInt)?;
+            for (party_id, comm) in &dkg_public_shares.comms {
+                if !check_public_shares(comm, threshold, &self.current_dkg_id.to_be_bytes()) {
+                    warn!(
+                        signer_id = %dkg_public_shares.signer_id,
+                        %party_id,
+                        "DkgPublicShares rejected: bad polynomial commitment"
+                    );
+                    return Ok(());
+                }
+            }
+
             self.ids_to_await.remove(&dkg_public_shares.signer_id);
 
             self.dkg_public_shares
@@ -533,6 +556,33 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
             for (party_id, comm) in &dkg_public_shares.comms {
                 self.party_polynomials.insert(*party_id, comm.clone());
             }
+        }
+
+        // Final sanity check on the polynomial commitments, matching the FIRE coordinator.
+        // The signers check these on receipt, but the aggregate key below is computed from the
+        // coordinator's own view, so a commitment that reached only the coordinator would
+        // otherwise be summed into the group key without its degree or its proof of knowledge
+        // of the constant term ever being verified.
+        let threshold: usize = self
+            .config
+            .threshold
+            .try_into()
+            .map_err(Error::TryFromInt)?;
+        let mut bad_ids = Vec::new();
+        for (party_id, comm) in &self.party_polynomials {
+            if !check_public_shares(comm, threshold, &self.current_dkg_id.to_be_bytes()) {
+                bad_ids.push(compute::id(*party_id));
+            }
+        }
+
+        if !bad_ids.is_empty() {
+            // Don't leave the rejected commitments cached. The state machine stays in
+            // DkgEndGather on this error so nothing reads them today, but a stale map here is a
+            // trap for whoever changes that.
+            self.party_polynomials.clear();
+            return Err(Error::Aggregator(AggregatorError::BadPolyCommitments(
+                bad_ids,
+            )));
         }
 
         // Calculate the aggregate public key
@@ -1144,6 +1194,174 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
 /// Test module for coordinator functionality
 pub mod test {
     use super::*;
+
+    /// A single malicious signer, broadcasting the same malformed commitment to everyone, must
+    /// not be able to crash the coordinator at the next signing round.
+    ///
+    /// Note this is NOT the `empty_public_shares` case: that sends `comms: vec![]`, so the
+    /// receipt-time insertion loop iterates zero times and nothing is cached. The poison needs a
+    /// commitment that is present but whose `poly` is empty, which `gather_public_shares` stores
+    /// before anything validates it. No equivocation is involved; every signer sees the same
+    /// malformed message and correctly fails the round.
+    fn malformed_public_shares_do_not_poison_the_next_signing_round<
+        Aggregator: AggregatorTrait,
+        SignerType: SignerTrait,
+    >() {
+        // A completed round first, so `aggregate_public_key` is Some and signing is permitted.
+        let (mut coordinators, mut signers) =
+            run_dkg::<FrostCoordinator<Aggregator>, SignerType>(5, 2);
+        assert!(coordinators[0].get_aggregate_public_key().is_some());
+
+        // A second round in which signer 0 empties the polynomial inside its commitment.
+        let message = coordinators[0].start_dkg_round(None).unwrap();
+        let (outbound, _) = feedback_mutated_messages(
+            &mut coordinators,
+            &mut signers,
+            &[message],
+            |signer, packets| {
+                if signer.signer_id != 0 {
+                    return packets.clone();
+                }
+                packets
+                    .iter()
+                    .map(|packet| {
+                        let Message::DkgPublicShares(shares) = &packet.msg else {
+                            return packet.clone();
+                        };
+                        let mut shares = shares.clone();
+                        for comm in shares.comms.iter_mut() {
+                            comm.1.poly.clear();
+                        }
+                        Packet {
+                            sig: packet.sig.clone(),
+                            msg: Message::DkgPublicShares(shares),
+                        }
+                    })
+                    .collect()
+            },
+        );
+
+        // Drive the round to quiescence; the failure surfaces several message rounds later.
+        let mut pending = outbound;
+        for _ in 0..12 {
+            if pending.is_empty() {
+                break;
+            }
+            let (next, _) = feedback_messages(&mut coordinators, &mut signers, &pending);
+            pending = next;
+        }
+
+        // The malformed message is refused at receipt, so nothing it carried is cached. Before
+        // the receipt-time check, the coordinator held an empty-poly commitment here, and a
+        // round that later reached share aggregation would index it and panic.
+        assert!(
+            coordinators[0]
+                .party_polynomials
+                .values()
+                .all(|comm| comm.poly.len() == coordinators[0].config.threshold as usize),
+            "a malformed commitment must never be cached"
+        );
+
+        // And the application may ask for a signature under the still-valid previous key
+        // without the coordinator dying. Either outcome is fine; a panic is not.
+        let result = coordinators[0].start_signing_round(b"msg", SignatureType::Frost, None);
+        assert!(
+            result.is_ok() || matches!(result, Err(Error::BadStateChange(_))),
+            "signing after a failed round must not panic; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_public_shares_do_not_poison_the_next_signing_round_v2() {
+        malformed_public_shares_do_not_poison_the_next_signing_round::<v2::Aggregator, v2::Signer>(
+        );
+    }
+
+    /// The aggregate key is summed from the coordinator's own view of the public shares, so a
+    /// commitment that reached only the coordinator must still be rejected.
+    ///
+    /// Driven directly rather than through `feedback_mutated_messages`, deliberately: a bad
+    /// commitment broadcast to the signers is caught by *their* `check_public_shares` and the
+    /// round fails before this point, which exercises a different check. The gap this covers is
+    /// the coordinator-only view, which an end-to-end mutation cannot express.
+    fn dkg_end_gathered_rejects_bad_public_shares<
+        Aggregator: AggregatorTrait,
+        SignerType: SignerTrait,
+    >() {
+        let (mut coordinators, _) = run_dkg::<FrostCoordinator<Aggregator>, SignerType>(5, 2);
+        let coordinator = coordinators.first_mut().unwrap();
+
+        // The honest view must pass, or the assertion below proves nothing.
+        coordinator
+            .dkg_end_gathered()
+            .expect("honest public shares must be accepted");
+
+        let (victim_signer_id, victim_party_id) = {
+            let (signer_id, shares) = coordinator.dkg_public_shares.iter().next().unwrap();
+            (*signer_id, shares.comms.first().unwrap().0)
+        };
+        let honest_comm = coordinator.dkg_public_shares[&victim_signer_id].comms[0]
+            .1
+            .clone();
+
+        let assert_named = |err: Error, case: &str| match err {
+            Error::Aggregator(AggregatorError::BadPolyCommitments(ids)) => assert_eq!(
+                ids,
+                vec![compute::id(victim_party_id)],
+                "{case}: the rejection must name the offending party"
+            ),
+            other => panic!("{case}: expected BadPolyCommitments, got {other:?}"),
+        };
+
+        // Both halves of `check_public_shares` matter on this path, so pin both.
+
+        // The proof of knowledge: a substituted constant term is what a rogue key contribution
+        // looks like, and the proof no longer matches poly[0].
+        coordinator
+            .dkg_public_shares
+            .get_mut(&victim_signer_id)
+            .unwrap()
+            .comms[0]
+            .1
+            .poly[0] = Point::from(Scalar::from(0xbadu32));
+        assert_named(
+            coordinator
+                .dkg_end_gathered()
+                .expect_err("a tampered constant term must be rejected"),
+            "tampered constant term",
+        );
+
+        // The degree: a commitment short of `threshold` coefficients would otherwise reach
+        // `aggregator.init` at the first signing round, which indexes poly[i] for i < threshold
+        // without a length check, and panic the coordinator.
+        {
+            let comms = &mut coordinator
+                .dkg_public_shares
+                .get_mut(&victim_signer_id)
+                .unwrap()
+                .comms;
+            comms[0].1 = honest_comm;
+            comms[0].1.poly.pop();
+        }
+        assert_named(
+            coordinator
+                .dkg_end_gathered()
+                .expect_err("a commitment short of threshold coefficients must be rejected"),
+            "short commitment",
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn dkg_end_gathered_rejects_bad_public_shares_v1() {
+        dkg_end_gathered_rejects_bad_public_shares::<v1::Aggregator, v1::Signer>();
+    }
+
+    #[test]
+    fn dkg_end_gathered_rejects_bad_public_shares_v2() {
+        dkg_end_gathered_rejects_bad_public_shares::<v2::Aggregator, v2::Signer>();
+    }
+
     #[cfg(feature = "with_v1")]
     use crate::v1;
     use crate::{
@@ -1156,9 +1374,9 @@ pub mod test {
                 test::{
                     bad_signature_share_request, btc_sign_verify, check_signature_shares,
                     coordinator_state_machine, empty_private_shares, empty_public_shares,
-                    equal_after_save_load, feedback_messages, invalid_nonce, new_coordinator,
-                    run_dkg, run_dkg_sign, setup, start_dkg_round, start_signing_round,
-                    verify_packet_sigs,
+                    equal_after_save_load, feedback_messages, feedback_mutated_messages,
+                    invalid_nonce, new_coordinator, run_dkg, run_dkg_sign, setup, start_dkg_round,
+                    start_signing_round, verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
             },
@@ -1296,7 +1514,11 @@ pub mod test {
         let mut coordinator: FrostCoordinator<Aggregator> = coordinators[0].clone();
 
         coordinator.start_dkg_round(None).unwrap(); // = State::DkgPublicGather;
-        let public_shares = DkgPublicShares {
+
+        // A malformed commitment is refused at receipt and leaves nothing cached. This used to
+        // be accepted, and the empty polynomial then sat in `party_polynomials` until a signing
+        // round indexed it.
+        let malformed = DkgPublicShares {
             dkg_id: 1,
             signer_id: 0,
             comms: vec![(
@@ -1304,6 +1526,44 @@ pub mod test {
                 PolyCommitment {
                     id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
                     poly: vec![],
+                },
+            )],
+            kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
+        };
+        coordinator
+            .gather_public_shares(&Packet {
+                msg: Message::DkgPublicShares(malformed),
+                sig: Default::default(),
+            })
+            .unwrap();
+        assert_eq!(0, coordinator.dkg_public_shares.len());
+        assert_eq!(0, coordinator.party_polynomials.len());
+
+        // A well-formed one is gathered. The proof of knowledge is over poly[0], so the
+        // commitment has to be built around a secret we hold.
+        let threshold = coordinator.config.threshold as usize;
+        let secret = Scalar::random(&mut rng);
+        let mut poly = vec![Point::from(secret)];
+        while poly.len() < threshold {
+            poly.push(Point::from(Scalar::random(&mut rng)));
+        }
+        let public_shares = DkgPublicShares {
+            dkg_id: 1,
+            signer_id: 0,
+            comms: vec![(
+                0,
+                PolyCommitment {
+                    id: ID::new(
+                        &Scalar::from(1u32),
+                        &secret,
+                        &coordinator.current_dkg_id.to_be_bytes(),
+                        &mut rng,
+                    ),
+                    poly,
                 },
             )],
             kex_public_key: Point::from(Scalar::random(&mut rng)),

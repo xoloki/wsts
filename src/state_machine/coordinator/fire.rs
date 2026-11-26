@@ -987,6 +987,10 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
         }
 
         if !bad_ids.is_empty() {
+            // Don't leave the rejected commitments cached. The state machine stays in
+            // DkgEndGather on this error so nothing reads them today, but a stale map here is a
+            // trap for whoever changes that.
+            self.party_polynomials.clear();
             return Err(Error::Aggregator(AggregatorError::BadPolyCommitments(
                 bad_ids,
             )));
@@ -1750,6 +1754,85 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
 /// Test module for coordinator functionality
 pub mod test {
     use super::*;
+    /// FIRE has always validated the commitments here, but nothing asserted it, so the check
+    /// could have been refactored away silently. Twin of the FROST test added alongside it.
+    fn dkg_end_gathered_rejects_bad_public_shares<
+        Aggregator: AggregatorTrait,
+        SignerType: SignerTrait,
+    >() {
+        let (mut coordinators, _) = run_dkg::<FireCoordinator<Aggregator>, SignerType>(5, 2);
+        let coordinator = coordinators.first_mut().unwrap();
+
+        coordinator
+            .dkg_end_gathered()
+            .expect("honest public shares must be accepted");
+
+        let (victim_signer_id, victim_party_id) = {
+            let (signer_id, shares) = coordinator.dkg_public_shares.iter().next().unwrap();
+            (*signer_id, shares.comms.first().unwrap().0)
+        };
+        let honest_comm = coordinator.dkg_public_shares[&victim_signer_id].comms[0]
+            .1
+            .clone();
+
+        let assert_named = |err: Error, case: &str| match err {
+            Error::Aggregator(AggregatorError::BadPolyCommitments(ids)) => assert_eq!(
+                ids,
+                vec![compute::id(victim_party_id)],
+                "{case}: the rejection must name the offending party"
+            ),
+            other => panic!("{case}: expected BadPolyCommitments, got {other:?}"),
+        };
+
+        // Both halves of `check_public_shares` matter on this path, so pin both.
+
+        // The proof of knowledge: a substituted constant term is what a rogue key contribution
+        // looks like, and the proof no longer matches poly[0].
+        coordinator
+            .dkg_public_shares
+            .get_mut(&victim_signer_id)
+            .unwrap()
+            .comms[0]
+            .1
+            .poly[0] = Point::from(Scalar::from(0xbadu32));
+        assert_named(
+            coordinator
+                .dkg_end_gathered()
+                .expect_err("a tampered constant term must be rejected"),
+            "tampered constant term",
+        );
+
+        // The degree: a commitment short of `threshold` coefficients would otherwise reach
+        // `aggregator.init` at the first signing round, which indexes poly[i] for i < threshold
+        // without a length check, and panic the coordinator.
+        {
+            let comms = &mut coordinator
+                .dkg_public_shares
+                .get_mut(&victim_signer_id)
+                .unwrap()
+                .comms;
+            comms[0].1 = honest_comm;
+            comms[0].1.poly.pop();
+        }
+        assert_named(
+            coordinator
+                .dkg_end_gathered()
+                .expect_err("a commitment short of threshold coefficients must be rejected"),
+            "short commitment",
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn dkg_end_gathered_rejects_bad_public_shares_v1() {
+        dkg_end_gathered_rejects_bad_public_shares::<v1::Aggregator, v1::Signer>();
+    }
+
+    #[test]
+    fn dkg_end_gathered_rejects_bad_public_shares_v2() {
+        dkg_end_gathered_rejects_bad_public_shares::<v2::Aggregator, v2::Signer>();
+    }
+
     #[cfg(feature = "with_v1")]
     use crate::v1;
     use crate::{
@@ -1766,7 +1849,7 @@ pub mod test {
                     bad_signature_share_request, btc_sign_verify, check_signature_shares,
                     coordinator_state_machine, empty_private_shares, empty_public_shares,
                     equal_after_save_load, feedback_messages, feedback_mutated_messages,
-                    gen_nonces, invalid_nonce, new_coordinator, run_dkg_sign, setup,
+                    gen_nonces, invalid_nonce, new_coordinator, run_dkg, run_dkg_sign, setup,
                     setup_with_timeouts, start_dkg_round, start_signing_round, verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
