@@ -1321,6 +1321,22 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
 /// Test module for coordinator functionality
 pub mod test {
     use super::*;
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn held_key_survives_a_malformed_rekey_v1() {
+        crate::state_machine::coordinator::test::held_key_survives_a_malformed_rekey::<
+            FrostCoordinator<v1::Aggregator>,
+            v1::Signer,
+        >();
+    }
+
+    #[test]
+    fn held_key_survives_a_malformed_rekey_v2() {
+        crate::state_machine::coordinator::test::held_key_survives_a_malformed_rekey::<
+            FrostCoordinator<v2::Aggregator>,
+            v2::Signer,
+        >();
+    }
 
     /// A single malicious signer, broadcasting the same malformed commitment to everyone, must
     /// not be able to crash the coordinator at the next signing round.

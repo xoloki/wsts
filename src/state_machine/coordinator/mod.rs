@@ -838,6 +838,195 @@ pub mod test {
         Ok((messages, results))
     }
 
+    /// The GHSA-whwx-jj37-4gg5 panic, reproduced in the configuration that makes it reachable.
+    ///
+    /// The 15.0.1 test guards the cache: a malformed commitment never enters
+    /// `party_polynomials`. Its "no panic" assertion, however, passed for the wrong reason with
+    /// stock signers, because they gate signing on `dkg_completed` and the round stalled before
+    /// `aggregator.init` was reached. Two preconditions have to be written as code for the
+    /// assertion to mean anything, and both are in [`held_key_fixture`] and used here:
+    ///
+    /// - the coordinator must hold a key **without** having run a DKG on this object, or a
+    ///   second round stalls at `DkgPrivateGather` ([`HeldKey::RestoredWithKey`]);
+    /// - the signers must be reloaded after the failed round, or `dkg_completed` keeps them from
+    ///   answering the nonce request.
+    ///
+    /// The mutator also re-proves the kex over the modified commitments. Without that the
+    /// signers reject on `kex_verify` and the test exercises packet validation instead of the
+    /// path under test.
+    pub fn held_key_survives_a_malformed_rekey<
+        Coordinator: CoordinatorTrait,
+        SignerType: SignerTrait,
+    >() {
+        let fixture = held_key_fixture::<Coordinator, SignerType>(4, 2, HeldKey::RestoredWithKey);
+        let mut coordinators = fixture.coordinators;
+        let mut signers = fixture.signers;
+
+        // Round two, in which signer 0 empties the polynomial inside each of its commitments
+        // and re-proves the kex so the message is otherwise well formed.
+        let begin = coordinators[0].start_dkg_round(None).unwrap();
+        let (outbound, _) = feedback_mutated_messages(
+            &mut coordinators,
+            &mut signers,
+            &[begin],
+            |signer, packets| {
+                if signer.signer_id != 0 {
+                    return packets.clone();
+                }
+                packets
+                    .iter()
+                    .map(|packet| {
+                        let Message::DkgPublicShares(shares) = &packet.msg else {
+                            return packet.clone();
+                        };
+                        let mut shares = shares.clone();
+                        for comm in shares.comms.iter_mut() {
+                            comm.1.poly.clear();
+                        }
+                        let mut rng = create_rng();
+                        let kex_private_key = Scalar::random(&mut rng);
+                        shares.kex_public_key = kex_private_key * G;
+                        shares.kex_proof = crate::net::DkgPublicShares::kex_prove(
+                            shares.dkg_id,
+                            shares.signer_id,
+                            &shares.comms,
+                            &kex_private_key,
+                            &mut rng,
+                        );
+                        Packet {
+                            sig: packet.sig.clone(),
+                            msg: Message::DkgPublicShares(shares),
+                        }
+                    })
+                    .collect()
+            },
+        );
+
+        // Drive the failed round to quiescence.
+        let mut pending = outbound;
+        for _ in 0..12 {
+            if pending.is_empty() {
+                break;
+            }
+            let (next, _) = feedback_messages(&mut coordinators, &mut signers, &pending);
+            pending = next;
+        }
+
+        // Undo the `dkg_completed` gate the new DkgBegin set, which is what an application that
+        // checkpoints signer state and rolls back after a failed re-key would do.
+        let mut signers: Vec<Signer<SignerType>> = fixture
+            .signer_saves
+            .iter()
+            .map(|s| Signer::<SignerType>::load(s))
+            .collect();
+
+        // The key is unchanged by the failed round, so signing under it must work rather than
+        // indexing a malformed commitment.
+        assert_eq!(
+            coordinators[0].get_aggregate_public_key(),
+            Some(fixture.key),
+            "a failed re-keying must leave the held key alone"
+        );
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let request =
+                coordinators[0].start_signing_round(b"held key", SignatureType::Frost, None)?;
+            let mut pending = vec![request];
+            for _ in 0..12 {
+                if pending.is_empty() {
+                    break;
+                }
+                let (next, results) = feedback_messages(&mut coordinators, &mut signers, &pending);
+                if results
+                    .iter()
+                    .any(|r| matches!(r, OperationResult::Sign(_)))
+                {
+                    return Ok(true);
+                }
+                pending = next;
+            }
+            Ok::<bool, Error>(false)
+        }));
+
+        match outcome {
+            Err(_) => panic!("signing under the held key panicked after a failed re-keying"),
+            Ok(Ok(_signed)) => {}
+            Ok(Err(e)) => panic!("signing failed with {e:?} rather than panicking or signing"),
+        }
+    }
+
+    /// How a coordinator came to be holding a group key.
+    ///
+    /// These are not interchangeable, and the difference is the one that hid
+    /// GHSA-whwx-jj37-4gg5 from three reviewers in a row. A coordinator that ran the round
+    /// still holds that round's `dkg_private_shares`, so a *second* round on the same object
+    /// stalls at `DkgPrivateGather` and never reaches the state where the advisory's panic was
+    /// reachable. A coordinator restored with a key, having run no DKG of its own, does reach
+    /// it. Every per-round-state test is expected to run on both.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum HeldKey {
+        /// The coordinator ran the DKG round that produced the key.
+        RanTheRound,
+        /// The coordinator was constructed and handed the key, as one restored from storage and
+        /// then asked to re-key would be.
+        RestoredWithKey,
+    }
+
+    /// A coordinator and signers holding a group key, reached either way.
+    ///
+    /// `signer_saves` is returned deliberately. Signers gate signing on `dkg_completed`, which
+    /// `Signer::reset` clears when a new `DkgBegin` arrives and only a *successful* `dkg_ended`
+    /// restores. A test that fails a re-keying round and then signs under the held key must
+    /// reload the signers from these saves at that point, or the round stalls at nonce gathering
+    /// and any "no panic" assertion passes without reaching the code it names.
+    pub struct HeldKeyFixture<Coordinator: CoordinatorTrait, SignerType: SignerTrait> {
+        /// coordinators holding the key
+        pub coordinators: Vec<Coordinator>,
+        /// signers holding their shares of it
+        pub signers: Vec<Signer<SignerType>>,
+        /// the aggregate public key they hold
+        pub key: Point,
+        /// signer state saved immediately after the successful round
+        pub signer_saves: Vec<crate::state_machine::signer::SavedState>,
+    }
+
+    /// Build a [`HeldKeyFixture`] in the requested configuration.
+    pub fn held_key_fixture<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+        held: HeldKey,
+    ) -> HeldKeyFixture<Coordinator, SignerType> {
+        let (coordinators, signers) =
+            run_dkg::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let key = coordinators[0]
+            .get_aggregate_public_key()
+            .expect("run_dkg must leave a key");
+        let signer_saves: Vec<_> = signers.iter().map(|s| s.save()).collect();
+
+        let coordinators = match held {
+            HeldKey::RanTheRound => coordinators,
+            HeldKey::RestoredWithKey => coordinators
+                .iter()
+                .map(|old| {
+                    let polys: Vec<(u32, crate::common::PolyCommitment)> =
+                        old.save().party_polynomials.into_iter().collect();
+                    let mut fresh = Coordinator::new(old.get_config());
+                    fresh
+                        .set_key_and_party_polynomials(key, polys)
+                        .expect("a fresh coordinator must accept the key it is handed");
+                    fresh
+                })
+                .collect(),
+        };
+
+        HeldKeyFixture {
+            coordinators,
+            signers,
+            key,
+            signer_saves,
+        }
+    }
+
     pub fn run_dkg<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
         num_signers: u32,
         keys_per_signer: u32,
