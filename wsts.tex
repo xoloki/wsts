@@ -1,6 +1,6 @@
 \documentclass{article}
 \title{Weighted Schnorr Threshold Signatures}
-\date{2023-01-19}
+\date{2023-01-19, revised 2026-11-22}
 \author{Joseph Wiley Yandle}
 \usepackage{amsmath}
 \usepackage{amsfonts}
@@ -8,6 +8,17 @@
 \usepackage{mathtools}
 \usepackage[symbol]{footmisc}
 \usepackage{caption}
+\usepackage{amsthm}
+
+\theoremstyle{plain}
+\newtheorem{thm}{Theorem}[section]
+\newtheorem{lem}[thm]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[thm]{Definition}
+\theoremstyle{remark}
+\newtheorem{rem}[thm]{Remark}
+
+\newcommand\sample{\xleftarrow{\$}}
 
 \renewcommand{\thefootnote}{\fnsymbol{footnote}}
 
@@ -51,7 +62,7 @@
 \leftskip5em
 \parskip1em
 \rightskip\leftskip
-\noindent\textbf{Abstract.} We present Weighted Schnorr Threshold Signatures (WSTS aka WileyProofs), which optimizes the base FROST implementation to reduce bandwidth when FROST parties control multiple keys.
+\noindent\textbf{Abstract.} We present Weighted Schnorr Threshold Signatures (WSTS aka WileyProofs), which optimizes the base FROST implementation to reduce bandwidth when FROST parties control multiple keys.  We also prove that WSTS is unforgeable in the random oracle model under the algebraic one-more discrete logarithm assumption, by adapting the proof of Chu, Gerhart, Ruffing and Schr\"oder for FROST3 to parties that hold several keys.
 
 \par
 \noindent\textbf{Keywords:} Weighted Aggregate Threshold Signatures; Zero-Knowledge Proofs; FROST
@@ -74,7 +85,7 @@ Here we present optimizations on top of vanilla FROST which reduce these ineffic
 
 While WSTS can be implemented in any group, we will use curve point terminology exclusively.  This will hopefully make it more accessible to engineers wishing to implement it.
 
-Let $G$ be a generator in an elliptic curve group $\mathbb{G}$.  Let $f$ be a polynomial of a scalar variable with scalar coefficients, and $P$ be a scalar polynomial with curve point coefficients.  Both $f$ and $P$ can be evaluated at a scalar, though the latter will use scalar/point multiplication rather than scalar/scalar.
+Let $G$ be a generator in an elliptic curve group $\mathbb{G}$ of prime order $p$, so that scalars are elements of $\mathbb{Z}_p$.  Let $f$ be a polynomial of a scalar variable with scalar coefficients, and $P$ be a scalar polynomial with curve point coefficients.  Both $f$ and $P$ can be evaluated at a scalar, though the latter will use scalar/point multiplication rather than scalar/scalar.
 
 Let $H$ be a hash function, which maps a series of binary inputs to a fixed size binary digest.  For a hash function to be effective, this mapping must be $one-way$; i.e. it should be impossible to go from a hash digest back to the binary inputs.  The most common hash functions include SHA2, SHA3, and Blake, each of which can create a variety of digest sizes, frequently $256$ or $512$ bits.
 
@@ -143,25 +154,25 @@ We call this $\lambda_i$, and use it to quickly evaluate $L(0)$ when given a set
 
 \subsection{
   Schnorr Proofs
-}
+}\label{section:schnorr}
 
 A Schnorr proof \cite{schnorr} is a zero knowledge proof of ownership of a public key.  Let scalar $x$ be a private key, with point $X = x \cdot G$ the corresponding public key.  To prove knowledge of $x$ given $X$, Schnorr proofs use a $3$-move commitment-challenge-response protocol, i.e. a Sigma protocol.
 
-The prover first commits to a random scalar $v$ with the corresponding point $V$, then sends $V$ to the verifier.  The verifier then returns a random challenge scalar $c$.  The prover then constructs the response $r = v + cx$.  The proof consists of the tuple $(r, c, V)$.
+The prover first commits to a random scalar $r$ with the corresponding point $R = r \cdot G$, then sends $R$ to the verifier.  The verifier then returns a random challenge scalar $c$.  The prover then constructs the response $s = r + cx$.  The proof consists of the pair $(R, s)$.
 
 To verify the proof, check that:
-\begin{align}
-  V = r \cdot G - c \cdot X
+\begin{align}\label{equation:schnorr-verify}
+  s \cdot G = R + c \cdot X
 \end{align}
 
 This must be true for a valid proof, since:
 \begin{align}
-  V &= v \cdot G = (r - cx) \cdot G = r \cdot G - cx \cdot G = r \cdot G - c \cdot X\nonumber
+  s \cdot G &= (r + cx) \cdot G = r \cdot G + cx \cdot G = R + c \cdot X\nonumber
 \end{align}
 
-To make this protocol non-interactive, use the Fiat-Shamir transform \cite{fiatshamir} to construct $c$ by hashing the initial proof elements $(G, X, V)$:
-\begin{align}
-  c = H(G, X, V)
+To make this protocol non-interactive, use the Fiat-Shamir transform \cite{fiatshamir} to construct $c$ by hashing the initial proof elements $(G, X, R)$:
+\begin{align}\label{equation:schnorr-challenge}
+  c = H(G, X, R)
 \end{align}
 
 \subsection{
@@ -180,27 +191,29 @@ Like many DKG schemes, FROST employs the technique of polynomial interpolation. 
 
 Remember that in polynomial interpolation, you need $k+1$ points to interpolate a degree $k$ polynomial.  FROST specifies a threshold $T$, which is the number of signers necessary to sign a message.  Thus we will need a group polynomial of degree $T-1$ so that any group of $T$ signers will be able to interpolate the key, and thereby sign.  This group polynomial $f$ will be the sum of the party polynomials $f_i$; the group private key $x$ will be $f(0)$, and the group public key $Y$ will be $P(0)$, where $P = f \cdot G$.
 
-First, each party is given a sequential ID $i \in [1, N]$, which will be used both to identify it and as an element in the underlying math.  Next, each party $i$ constructs a random private scalar polynomial $f_i$ of degree $T-1$, where the coefficients are also scalars.  A public DKG share is constructed from $f_i$ by multiplying each coefficient by a generator $G$.  The ID $i$ and public polynomial $P_i$ are then shared to all other parties.
+First, each party is given a sequential ID $i \in [1, N]$, which will be used both to identify it and as an element in the underlying math.  Next, each party $i$ constructs a random private scalar polynomial $f_i$ of degree $T-1$ by sampling its coefficients $a_{i,0}, \ldots, a_{i,T-1} \sample \mathbb{Z}_p$:
+\begin{align}\label{equation:frost-polynomial}
+  f_i(x) = \sum_{j=0}^{T-1} a_{i,j} \cdot x^j, \qquad P_i(x) = f_i(x) \cdot G.
+\end{align}
+A public DKG share is constructed from $f_i$ by multiplying each coefficient by the generator $G$, giving the coefficients of $P_i$.  Party $i$ also proves knowledge of the constant term $a_{i,0}$ with a Schnorr proof (Section~\ref{section:schnorr}): it samples $r \sample \mathbb{Z}_p$, sets $R_i = r \cdot G$ and $c_i = H_{\mathrm{pok}}(i, R_i, a_{i,0} \cdot G, \Phi)$, where $\Phi$ is a context string identifying this DKG run, and computes $s_i = r + c_i \cdot a_{i,0}$.  The ID $i$, the public polynomial $P_i$ and the proof $(R_i, s_i)$ are then shared to all other parties, which check that $P_i$ has exactly $T$ coefficients and that $s_i \cdot G = R_i + c_i \cdot P_i(0)$.  The proof rules out rogue-key attacks, in which a party chooses its constant term as a function of the other parties' public values without knowing its discrete logarithm \cite{frost}.
 
 Each party $i$ evaluates its own $f_i$ at each $j \in [1,N]$, and sends a private DKG share to each consisting of $(j, f_i(j))$.  Each receiving party checks each private share for consistency with the public polynomial of the sending party.  This is done for party $i$ by checking that:
-\begin{align}
+\begin{align}\label{equation:frost-dkg-check}
   \forall j \in [1,N] \ni j \neq i;\;f_j(i) \cdot G = P_j(i)
 \end{align}
 
 Once the private shares are verified, each party $i$ computes its share $s_i$ of the group secret key by summing the private polynomial evaluations at $i$ from all parties, then uses it to construct its public key $Y_i$:
-\begin{align}
+\begin{align}\label{equation:frost-share}
   s_i = \sum_{j=1}^{N} f_j(i) ;\; Y_i = s_i \cdot G
 \end{align}
 
 Each party computes the group public key $Y$ by summing the first coefficient of each public polynomial:
-\begin{align}
+\begin{align}\label{equation:frost-group-key}
   Y = \sum_{j=1}^{N} P_j(0)
 \end{align}
 
 At this point DKG is complete, and each party $i$ knows $(s_i, Y_i)$ and the group key $Y$.
 
-\newpage
-\onecolumn
 \subsubsection{
   Gathering Party Signatures
 }
@@ -208,27 +221,27 @@ At this point DKG is complete, and each party $i$ knows $(s_i, Y_i)$ and the gro
 To sign a message $m$, it is necessary to choose the signing set $S$ before any party can sign, with $|S| >= T$; this allows polynomial interpolation to work.  Each party $i \in S$ then constructs a private nonce $(d_i,e_i)$ and corresponding public nonce $(D_i,E_i)$, then sends $(i, D_i, E_i)$ to all other parties in $S$; this forms the set $B$.
 
 Once nonces have been received, each party $i \in S$ computes the binding values $\rho_j$ using $B$ and $m$:
-\begin{align}
-  \forall j \in S;\;\rho_j = H(j, m, B)
+\begin{align}\label{equation:frost-rho}
+  \forall j \in S;\;\rho_j = H_\rho(j, m, B)
 \end{align}
 
 Next they compute the interpolation value $\lambda_i$:
-\begin{align}
+\begin{align}\label{equation:frost-lambda}
   \lambda_i = \prod_{j \in S; j \neq i}^{} \frac{j}{j - i}
 \end{align}
 
 Each party also computes the sum $R$:
-\begin{align}
+\begin{align}\label{equation:frost-R}
   R = \sum_{j \in S}^{} D_j + \rho_j \cdot E_j
 \end{align}
 
 Once they have $R$ and message $m$ they can construct the challenge $c$:
-\begin{align}
-  c = H(Y, R, m)
+\begin{align}\label{equation:frost-c}
+  c = H_c(Y, R, m)
 \end{align}
 
 Finally, each party $i$ can construct its signature share $z_i$:
-\begin{align}
+\begin{align}\label{equation:frost-z}
   z_i = d_i + \rho_i \cdot e_i + s_i \cdot c \cdot \lambda_i
 \end{align}
 
@@ -238,23 +251,23 @@ Finally, each party $i$ can construct its signature share $z_i$:
 }
 
 Once the aggregator has gathered the signature shares $z_i$, it must first verify that they are valid by checking that:
-\begin{align}
+\begin{align}\label{equation:frost-share-check}
   z_i \cdot G = D_i + \rho_i \cdot E_i + Y_i \cdot c \cdot \lambda_i
 \end{align}
 
 Finally the aggregator can construct the group signature $z$:
-\begin{align}
+\begin{align}\label{equation:frost-z-sum}
   z = \sum_{i \in S}^{} z_i
 \end{align}
 
-The full signature consists of $(R, z)$ using $R$ from $(11)$.
+The full signature consists of $(R, z)$ using $R$ from \eqref{equation:frost-R}.
 
 \subsubsection{
   Verifying the Group Signature
 }
 
 To verify the group signature, construct the value $R'$ from the group public key $Y$, challenge $c$, and group signature $z$:
-\begin{align}
+\begin{align}\label{equation:frost-verify}
   R' = z \cdot G - c \cdot Y
 \end{align}
 
@@ -262,11 +275,11 @@ If $R = R'$, the proof is valid.
 
 \subsubsection{
   FROST as a Schnorr Proof
-}
+}\label{section:frost-schnorr}
 
-How does the FROST algorithm produce a Schnorr proof?  To do so, it should first commit to some randomness $v$ via $V$, produce a challenge that depends on $V$, and then give a response that combines the commitment $v$, challenge $c$, and underlying secret $x$: $r = v + cx$.
+How does the FROST algorithm produce a Schnorr proof?  To do so, it should first commit to some randomness $r$ via $R$, produce a challenge that depends on $R$, and then give a response that combines the commitment $r$, challenge $c$, and underlying secret $x$: $s = r + cx$.
 
-This is exactly what FROST does.  The committed values are the nonces $(d_i, e_i)$, shared as $(D_i, E_i)$, and aggregated into the sum $R$, which is used to construct the challenge.  And if we expand the aggregation of the party signatures $z_i$, we can see that the response, the signature $z$, is indeed $v + cx$:
+This is exactly what FROST does.  The committed values are the nonces $(d_i, e_i)$, shared as $(D_i, E_i)$, and aggregated into the sum $R$, which is used to construct the challenge.  And if we expand the aggregation of the party signatures $z_i$, we can see that the response, the signature $z$, is indeed $r + cx$:
 \begin{align}
   z = \sum_{i \in S}^{} z_i = \sum_{i \in S}^{} d_i + \rho_i \cdot e_i + s_i \cdot c \cdot \lambda_i = \sum_{i \in S}^{} (d_i + \rho_i \cdot e_i) + c \cdot \sum_{i \in S}^{}(s_i \cdot \lambda_i)\nonumber
 \end{align}
@@ -289,6 +302,8 @@ There are also many native weighted threshold signing schemes, but ultimately al
 
 There was one compelling candidate though: An Efficient and Secure Weighted Threshold Signcryption Scheme \cite{eswtss}.  It uses standard elliptic curves combined with a dynamic knapsack sytem, and the Chinese Remainder theorem to set the voting weights.  We rejected it due to its complexity and lack of track record in production systems.  But it remains an ongoing object of research.
 
+The security of FROST itself has been studied in several models.  Komlo and Goldberg \cite{frost} prove a three-round variant, FROST-Interactive, unforgeable under the discrete logarithm assumption and argue heuristically that the two-round protocol inherits the result.  The two-round protocol was later proven secure directly: by Crites, Komlo and Maller in the algebraic group model \cite{ckm21}, by Bellare et al.\ under the one-more discrete logarithm assumption with idealized key generation, together with a hierarchy of unforgeability notions \cite{bckmtz22, btz22}, and by Chu, Gerhart, Ruffing and Schr\"oder under the algebraic one-more discrete logarithm assumption with the key generation included \cite{cgrs23}.  None of these results applies to WSTS as a black box, because an honest WSTS party signs for all of its keys with a single nonce pair; Appendix~\ref{section:security} adapts the last of them.
+
 \section{
   WSTS: Weighted Schnorr Threshold Signatures
 }
@@ -303,57 +318,57 @@ Each party is given not only a party ID $i_p \in [1, N_p]$ as in FROST, but also
 
 \subsection{
   Distributed Key Generation (DKG)
-}
+}\label{section:wsts-dkg}
 
-Each party $i_p \in [1, N_p]$ begins DKG by generating a random scalar polynomial $f_{i_p}$ with scalar coefficients.  They then construct DKG public shares by multiplying the coefficients of $f_{i_p}$ by the generator, to obtain $P_{i_p}$.
+Each party $i_p \in [1, N_p]$ begins DKG by generating a random scalar polynomial $f_{i_p}$ of degree $T-1$ as in \eqref{equation:frost-polynomial}.  They then construct DKG public shares by multiplying the coefficients of $f_{i_p}$ by the generator, to obtain $P_{i_p}$, and attach a Schnorr proof of knowledge of the constant term $f_{i_p}(0)$ exactly as in FROST, with the party ID $i_p$ and a context string $\Phi$ bound into the challenge.  The public shares are broadcast, so that every party receives the same set.  A coordinator then announces the set $\mathcal{A} \subseteq [1, N_p]$ of parties whose public shares it accepted; the remaining steps run over $\mathcal{A}$, and a party not in $\mathcal{A}$ abandons the round.  In the common case $\mathcal{A} = [1, N_p]$.
 
-Once the DKG public shares have been distributed, the parties create DKG private shares by evaluating $f_{i_p}$ at all points $j_k \in [1, N_k]$.  These shares consist of a set of tuples $(i_p, (i_k, f_{i_p}(i_k)))$.
+Once the DKG public shares have been distributed, the parties create DKG private shares by evaluating $f_{i_p}$ at all points $j_k \in [1, N_k]$.  These shares consist of a set of tuples $(i_p, (i_k, f_{i_p}(i_k)))$.  Each private share is sent only to the party holding key $i_k$, over a channel that provides confidentiality and authentication.
 
-Once a party receives its DKG public and private shares, it first must verify that each share is valid using a similar formula as before:
-\begin{align}
-  \forall j_p \in [1,N_p], i_k \in K_{i_p}; f_{j_p}(i_k) \cdot G = P_{j_p}(i_k)
+Once a party receives its DKG public and private shares, it first verifies every public share in $\mathcal{A}$: the proof of knowledge must verify and $P_{j_p}$ must have exactly $T$ coefficients.  It then verifies each private share against the corresponding public share, using a similar formula as before:
+\begin{align}\label{equation:wsts-dkg-check}
+  \forall j_p \in \mathcal{A}, i_k \in K_{i_p}; f_{j_p}(i_k) \cdot G = P_{j_p}(i_k)
 \end{align}
 
 Once the private shares are verified, each party $i_p$ computes its shares $s_{i_k}$ of the group secret key by summing the private polynomial evaluations from all parties for each key $i_k$, giving the group polynomial $f$ evaluated at $i_k$, i.e. one interpolation point. The parties then use each $s_{i_k}$ to construct the corresponding public key $Y_{i_k}$:
-\begin{align}
-  s_{i_k} = \sum_{j_p = 1}^{N_p} f_{j_p}(i_k) ;\; Y_{i_k} = s_{i_k} \cdot G
+\begin{align}\label{equation:wsts-share}
+  s_{i_k} = \sum_{j_p \in \mathcal{A}} f_{j_p}(i_k) ;\; Y_{i_k} = s_{i_k} \cdot G
 \end{align}
 
 Each party computes the group public key $Y$ by summing the first coefficient of each public polynomial:
-\begin{align}
-  Y = \sum_{j_p=1}^{N_p} P_{j_p}(0)
+\begin{align}\label{equation:wsts-group-key}
+  Y = \sum_{j_p \in \mathcal{A}} P_{j_p}(0)
 \end{align}
 
 At this point DKG is complete, and each party $i_p$ knows all of its $(s_{i_k}, Y_{i_k})$ and the group key $Y$.
 
 \subsection{
   Gathering Party Signatures
-}
+}\label{section:wsts-sign}
 
-As before, in order for polynomial interpolation to work, it is necessary to choose the signing parties $S_p \ni \forall s_p \in S_p, s_p \in [1, N_p]$, and the corresponding $S_k$ which consists of the union of all $i_k \in K_{i_p}\; \forall i_p \in S_p$, before any party can sign, with $|S_k| >= T$.  Each party $i_p \in S_p$ then constructs a private nonce $(d_{i_p},e_{i_p})$ and corresponding public nonce $(D_{i_p},E_{i_p})$, then sends $(i_p, D_{i_p},E_{i_p})$ to all other parties with keys in $S_k$, forming set $B$ as before.
+As before, in order for polynomial interpolation to work, it is necessary to choose the signing parties $S_p \ni \forall s_p \in S_p, s_p \in [1, N_p]$, and the corresponding $S_k$ which consists of the union of all $i_k \in K_{i_p}\; \forall i_p \in S_p$, before any party can sign, with $|S_k| >= T$.  Each party accepts only the key set $S_k$ given by $S_p$ and the public key assignment, and refuses a signing request whose claimed key IDs differ from it; otherwise a dishonest coordinator could make it sign with the wrong interpolation values.  Each party $i_p \in S_p$ then constructs a private nonce $(d_{i_p},e_{i_p})$ and corresponding public nonce $(D_{i_p},E_{i_p})$, then sends $(i_p, D_{i_p},E_{i_p})$ to all other parties with keys in $S_k$, forming set $B$ as before.  A nonce is used for exactly one signature share and then discarded.
 
-Once nonces have been received, each party $i_p \in S_p$ computes the binding values $\rho_{j_p}$ using $B$ and $m$:
-\begin{align}
-  \forall j_p \in S_p;\;\rho_{j_p} = H(j_p, m, B)
+Once nonces have been received, each party $i_p \in S_p$ computes the binding values $\rho_{j_p}$ using $B$ and $m$.  Unlike FROST, WSTS also binds the group public key $Y$ into $\rho$:
+\begin{align}\label{equation:wsts-rho}
+  \forall j_p \in S_p;\;\rho_{j_p} = H_\rho(j_p, Y, m, B)
 \end{align}
 
 Next, $\forall i_k \in K_{i_p}$,  they compute the interpolation values $\lambda_{i_k}$:
-\begin{align}
+\begin{align}\label{equation:wsts-lambda}
   \lambda_{i_k} = \prod_{j_k \in S_k; j_k \neq i_k}^{} \frac{j_k}{j_k - i_k}
 \end{align}
 
 Each party also computes the sum $R$:
-\begin{align}
+\begin{align}\label{equation:wsts-R}
   R = \sum_{j_p \in S_p}^{} D_{j_p} + \rho_{j_p} \cdot E_{j_p}
 \end{align}
 
 Once they have $R$ and message $m$ they can construct the challenge $c$:
-\begin{align}
-  c = H(Y, R, m)
+\begin{align}\label{equation:wsts-c}
+  c = H_c(Y, R, m)
 \end{align}
 
 Finally, each party $i_p$ can construct its signature share $z_{i_p}$:
-\begin{align}
+\begin{align}\label{equation:wsts-z}
   z_{i_p} = d_{i_p} + \rho_{i_p} \cdot e_{i_p} + \sum_{j_k \in K_{i_p}}^{} s_{j_k} \cdot c \cdot \lambda_{j_k}
 \end{align}
 
@@ -363,23 +378,23 @@ Finally, each party $i_p$ can construct its signature share $z_{i_p}$:
 }
 
 Once the aggregator has gathered the signature shares $z_{i_p}$, it must first verify that they are valid by checking that:
-\begin{align}
+\begin{align}\label{equation:wsts-share-check}
   z_{i_p} \cdot G = D_{i_p} + \rho_{i_p} \cdot E_{i_p} + \sum_{j_k \in K_{i_p}}^{} Y_{j_k} \cdot c \cdot \lambda_{j_k}
 \end{align}
 
 Finally the aggregator can construct the group signature $z$:
-\begin{align}
+\begin{align}\label{equation:wsts-z-sum}
   z = \sum_{i_p \in S_p}^{} z_{i_p}
 \end{align}
 
-The full signature consists of $(R, z)$ using $R$ from $(22)$.
+The full signature consists of $(R, z)$ using $R$ from \eqref{equation:wsts-R}.
 
 \subsection{
   Verifying the Group Signature
 }
 
 To verify the group signature, construct the value $R'$ from the group public key $Y$, challenge $c$, and group signature $z$:
-\begin{align}
+\begin{align}\label{equation:wsts-verify}
   R' = z \cdot G - c \cdot Y
 \end{align}
 
@@ -387,15 +402,33 @@ If $R = R'$, the proof is valid.
 
 \subsubsection{
   WSTS as a Schnorr Proof
-}
+}\label{section:wsts-schnorr}
 
-WSTS constructs a Schnorr proof in the same way as FROST, with the same commitment value and challenge.  The response, the signature $z$, likewise expands to $v + cx$:
+WSTS constructs a Schnorr proof in the same way as FROST, with the same commitment value and challenge.  The response, the signature $z$, likewise expands to $r + cx$:
 \begin{align}
   z = \sum_{i_p \in S_p}^{} z_{i_p} = \sum_{i_p \in S_p}^{} d_{i_p} + \rho_{i_p} \cdot e_{i_p} + \sum_{j_k \in K_{i_p}}^{} s_{j_k} \cdot c \cdot \lambda_{j_k} = \sum_{i_p \in S_p}^{} (d_{i_p} + \rho_{i_p} \cdot e_{i_p}) + c \cdot \sum_{j_k \in S_k}^{} (s_{j_k} \cdot \lambda_{j_k})\nonumber
 \end{align}
 
 As we know from Lagrange interpolation, $\sum_{j_k \in S_k}^{} s_{j_k} \cdot \lambda_{j_k}$ is the group polynomial evaluated at $0$, which is the group private key $x$.
 
+
+\subsection{
+  Hash Functions
+}\label{section:hashes}
+
+WSTS uses three hash functions, each mapping to a scalar and each under its own domain separation tag, so that they can be modelled as independent random oracles:
+\begin{itemize}
+  \item $H_{\mathrm{pok}}(i_p, R, A, \Phi)$, the challenge of the DKG proof of knowledge.  The reference implementation computes SHA-256 over the tag \texttt{WSTS/polynomial-constant}, the party ID, the compressed points $R$ and $A$, and the context $\Phi$, which is the DKG round identifier.
+  \item $H_\rho(j_p, Y, m, B)$, the binding value.  The implementation first hashes the commitment list $B$ to a scalar with the \texttt{expand\_message\_xmd} construction of RFC 9380 under the tag \texttt{WSTS/group\_commitment}, then expands the party ID, the compressed group key, the message and that digest under the tag \texttt{WSTS/binding}.
+  \item $H_c(Y, R, m)$, the Schnorr challenge.  The implementation uses the BIP340 tagged hash \texttt{BIP0340/challenge} \cite{bip340} over the x-coordinates of $R$ and $Y$ and the message, so that the group signature can be checked by any BIP340 verifier.
+\end{itemize}
+Nonces are derived as in RFC 9591 \cite{rfc9591}, by hashing fresh randomness together with a secret held by the party, so that a faulty random number generator alone cannot produce a zero or repeated nonce.
+
+\subsection{
+  Signature Variants
+}\label{section:variants}
+
+The protocol as described produces a signature $(R, z)$ on the full point $R$ that verifies as $z \cdot G = R + c \cdot Y$; we call this the plain variant.  The reference implementation also produces BIP340 signatures \cite{bip340}, which are verified against the x-coordinates of $R$ and of the group key, optionally tweaked as in BIP341 for taproot.  To do so, each party negates its nonce contribution $d_{i_p} + \rho_{i_p} \cdot e_{i_p}$ when $R$ has an odd $y$-coordinate, and negates its key contribution $c \cdot \sum_{j_k} s_{j_k} \cdot \lambda_{j_k}$ when the group key has an odd $y$-coordinate, or, in the taproot case, when exactly one of the group key and the tweaked key does; the aggregator then adds $c$ times the tweak.  The security result of Appendix~\ref{section:security} is stated for the plain variant.
 
 \newpage
 \onecolumn
@@ -484,7 +517,7 @@ As with FIRE, we can use either FROST or WSTS as the signature aggregation proto
 
 The author would like to thank Alie Slade for initial work on the WSTS algorithm.
 
-\begin{thebibliography}{7}
+\begin{thebibliography}{99}
 
 \bibitem{frost}
   Chelsea Komlo, Ian Goldberg
@@ -523,6 +556,48 @@ The author would like to thank Alie Slade for initial work on the WSTS algorithm
   \emph{ROAST: Robust Asynchronous Schnorr Threshold Signatures} 
   \texttt{https://eprint.iacr.org/2022/550.pdf}
 
+\bibitem{ckm21}
+  Elizabeth Crites, Chelsea Komlo, Mary Maller
+  \emph{How to Prove Schnorr Assuming Schnorr: Security of Multi- and Threshold Signatures} 2021.
+  \texttt{https://eprint.iacr.org/2021/1375}
+
+\bibitem{bckmtz22}
+  Mihir Bellare, Elizabeth Crites, Chelsea Komlo, Mary Maller, Stefano Tessaro, Chenzhi Zhu
+  \emph{Better than Advertised Security for Non-Interactive Threshold Signatures} CRYPTO 2022.
+
+\bibitem{btz22}
+  Mihir Bellare, Stefano Tessaro, Chenzhi Zhu
+  \emph{Stronger Security for Non-Interactive Threshold Signatures: BLS and FROST} 2022.
+  \texttt{https://eprint.iacr.org/2022/833}
+
+\bibitem{cgrs23}
+  Hien Chu, Paul Gerhart, Tim Ruffing, Dominique Schr\"oder
+  \emph{Practical Schnorr Threshold Signatures Without the Algebraic Group Model} CRYPTO 2023.
+  \texttt{https://eprint.iacr.org/2023/899}
+
+\bibitem{nrs21}
+  Jonas Nick, Tim Ruffing, Yannick Seurin
+  \emph{MuSig2: Simple Two-Round Schnorr Multi-Signatures} CRYPTO 2021.
+  \texttt{https://eprint.iacr.org/2020/1261}
+
+\bibitem{bn06}
+  Mihir Bellare, Gregory Neven
+  \emph{Multi-Signatures in the Plain Public-Key Model and a General Forking Lemma} ACM CCS 2006.
+
+\bibitem{bcj08}
+  Ali Bagherzandi, Jung Hee Cheon, Stanis\l{}aw Jarecki
+  \emph{Multisignatures Secure under the Discrete Logarithm Assumption and a Generalized Forking Lemma} ACM CCS 2008.
+
+\bibitem{rfc9591}
+  Deirdre Connolly, Chelsea Komlo, Ian Goldberg, Christopher A. Wood
+  \emph{RFC 9591: The Flexible Round-Optimized Schnorr Threshold (FROST) Protocol for Two-Round Schnorr Signatures} 2024.
+  \texttt{https://www.rfc-editor.org/rfc/rfc9591}
+
+\bibitem{bip340}
+  Pieter Wuille, Jonas Nick, Tim Ruffing
+  \emph{BIP 340: Schnorr Signatures for secp256k1}.
+  \texttt{https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki}
+
 \end{thebibliography}
 
 \appendix
@@ -531,15 +606,200 @@ The author would like to thank Alie Slade for initial work on the WSTS algorithm
 
 \section{
   Security
-}
+}\label{section:security}
 
 \subsection{
   Correctness
 }
 
-In Sections 4.4.1 and 2.7.5, we show how WSTS and FROST reduce to a Schnorr proof.  This is sufficient to show correctness.  
+In Sections~\ref{section:wsts-schnorr} and~\ref{section:frost-schnorr}, we show that the WSTS and FROST group signatures are Schnorr signatures under the group public key: $(R, z)$ satisfies $z \cdot G = R + c \cdot Y$ with $c = H_c(Y, R, m)$.  This is sufficient to show correctness.
 
+\subsection{
+  Overview
+}
 
+The remainder of this appendix proves that WSTS is unforgeable.  A natural first attempt is to reduce WSTS to FROST as a black box, by viewing each key as a FROST participant.  That attempt fails, for a reason worth recording: a WSTS party signs for all of its keys with a \emph{single} nonce pair, whereas the FROST participants it would map to each carry an independent nonce pair and an independent binding value.  The natural black-box reductions cannot turn the latter into the former, because a party's commitment is fixed before any of the per-key binding values exist, so the FROST theorem cannot be invoked as a black box for any configuration in which an honest party holds more than one key, which is every configuration WSTS exists for.
+
+Instead we prove unforgeability directly, by adapting the proof of Chu, Gerhart, Ruffing and Schr\"oder \cite{cgrs23} for Olaf (FROST3 with a Pedersen key generation with proofs of possession).  Their proof uses only three properties of the way the secret key is shared among the signers: for an authorized signing set the honest and corrupted additive shares sum to the secret key; each honest signer's additive share has a public key computable from the key generation transcript; and the simulator can sample the corrupted shares consistently with the group key.  WSTS has all three, with the honest party's additive share $\sum_{k \in K_i} \lambda_k s_k$ in place of FROST's $\lambda_i s_i$.  Two further differences from Olaf are handled explicitly: WSTS uses a per-party binding value as in FROST1 \cite{btz22} rather than a single one, and WSTS parties are corrupted as units carrying several keys, so the usual convention of padding the corrupted set to exactly $T-1$ participants is replaced by padding the corrupted \emph{key} set.
+
+The result is stated for the plain variant of Section~\ref{section:variants}.  Like \cite{cgrs23} it is in the random oracle model under the algebraic one-more discrete logarithm assumption, a falsifiable weakening of the one-more discrete logarithm assumption, and it does not use the algebraic group model.
+
+\subsection{
+  Model
+}\label{section:model}
+
+\paragraph{Parameters.}  Throughout, $\mathbb{G}$ is a group of prime order $p$ with generator $G$, where $p$ is a $\lambda$-bit prime, so $2^{\lambda-1} \le p < 2^{\lambda}$.  A WSTS instance has $N_p$ parties and $N_k$ keys with threshold $T$; the \emph{key assignment} $K$ partitions $[1, N_k]$ into the sets $K_i$, $i \in [1, N_p]$.  To lighten the notation of the body we write $i$ for a party and $k$ for a key, and for a set of parties $S$ we write $w(S) = \sum_{i \in S} |K_i|$ for its weight and $\mathrm{keys}(S) = \bigcup_{i \in S} K_i$ for its key set.  For a set of keys $S_k$ and $k \in S_k$, $\lambda_k^{S_k}$ is the Lagrange coefficient of \eqref{equation:wsts-lambda}.
+
+\paragraph{Corruption.}  An adversary statically corrupts a set $\mathcal{C} \subset [1, N_p]$ of parties with $w(\mathcal{C}) < T$ before the protocol begins, and controls them completely.  It also plays the coordinator and the signature aggregator.  The remaining parties $\mathcal{H} = [1, N_p] \setminus \mathcal{C}$ are honest and follow the protocol.  The bound is on weight rather than on the number of parties: since every party holds at least one key, $|\mathcal{C}| \le w(\mathcal{C}) \le T-1$ as in FROST, but $\mathcal{C}$ may reach that weight with far fewer parties, and $\mathcal{H}$ may consist of a single party holding many keys.
+
+\paragraph{Channels.}  During DKG, public shares and the coordinator's messages are sent over an authenticated broadcast channel: every honest party receives the same messages, from honest and corrupted parties alike.  This is the assumption made for FROST by Komlo and Goldberg \cite{frost}, who assume that ``participants do not provide different commitment values to a subset of participants''; the protocol of \cite{cgrs23} instead rebuilds this agreement with an explicit equality check.  Private shares are sent over secure point-to-point channels, which the reference implementation realizes by encrypting them under a Diffie-Hellman key.  Signing messages travel over a network controlled by the adversary.
+
+\paragraph{Random oracles.}  The three hash functions $H_{\mathrm{pok}}$, $H_\rho$ and $H_c$ of Section~\ref{section:hashes} are modelled as independent random oracles with range $\mathbb{Z}_p$.  Each is queried by the adversary at most $q_h$ times.
+
+\begin{definition}[Algebraic one-more discrete logarithm \cite{nrs21}]\label{definition:aomdl}
+  An algorithm $\mathcal{A}$ for the AOMDL problem in $\mathbb{G}$ is given access to a challenge oracle $\mathcal{O}_{\mathrm{ch}}$, which on each call returns a fresh uniformly random $X_j \in \mathbb{G}$, and a discrete logarithm oracle $\mathcal{O}_{\mathrm{dl}}$, which takes a group element $Z$ together with an explicit representation $Z = \alpha \cdot G + \sum_j \beta_j \cdot X_j$ in terms of the challenges obtained so far and returns $\log_G Z$.  $\mathcal{A}$ wins if it returns the discrete logarithms of all $c$ challenges it requested after having made fewer than $c$ queries to $\mathcal{O}_{\mathrm{dl}}$.  The AOMDL assumption states that every efficient $\mathcal{A}$ wins with negligible probability $\mathrm{Adv}^{\mathrm{aomdl}}_{\mathcal{A}, \mathbb{G}}$.
+\end{definition}
+
+The representation requirement is what makes AOMDL falsifiable; it is weaker than OMDL, in which $\mathcal{O}_{\mathrm{dl}}$ takes a bare group element.  Our reduction always knows a representation for the elements it queries.
+
+We use the forking lemma of Bellare and Neven \cite{bn06} and the multi-forking lemma of Bagherzandi, Cheon and Jarecki \cite{bcj08}, in the formulation of \cite[Lemmas~1 and~2]{cgrs23}.  Both are stated for a randomized algorithm $\mathcal{A}$ that takes an input $\mathit{inp}$, a sequence $h_1, \ldots, h_q$ of elements of $\mathbb{Z}_p$ (the random oracle replies it will hand out), and random coins, and returns either $\bot$ or an index into the sequence together with a side output.  Its accepting probability $\mathrm{acc}_{\mathcal{A}}$ is the probability that it does not return $\bot$.
+
+\begin{lem}[Forking lemma \cite{bn06}]\label{lemma:bn}
+  Let $\mathrm{Fork}_{\mathcal{A}}$ run $\mathcal{A}$ once, and if it returns an index $f$ run it a second time with the same input and coins but with $h_f, \ldots, h_q$ replaced by fresh values, succeeding if the second run returns the same index $f$ and $h_f \ne h'_f$.  Then $\mathrm{Fork}_{\mathcal{A}}$ succeeds with probability $\mathrm{frk} \ge \mathrm{acc}_{\mathcal{A}} \cdot (\mathrm{acc}_{\mathcal{A}} / q - 1/p)$.
+\end{lem}
+
+\begin{lem}[Multi-forking lemma \cite{bcj08}]\label{lemma:bcj}
+  Let $\mathcal{A}$ return a nonempty set $F$ of indices instead of a single one.  Let $\mathrm{MFork}_{\mathcal{A}}$ run $\mathcal{A}$ once and then, for each $f \in F$, repeatedly rerun it with fresh $h_f, \ldots, h_q$, at most $k_{\max} = |F| \cdot 8q / \mathrm{acc}_{\mathcal{A}} \cdot \ln(8|F| / \mathrm{acc}_{\mathcal{A}})$ times, until a run returns a set containing $f$ with $h'_f \ne h_f$.  If $p > 8q |F| / \mathrm{acc}_{\mathcal{A}}$ then, with probability at least $\mathrm{acc}_{\mathcal{A}} / 8$, $\mathrm{MFork}_{\mathcal{A}}$ obtains such a run for every $f \in F$.
+\end{lem}
+
+\subsection{
+  Unforgeability
+}\label{section:unforgeability}
+
+We define unforgeability through a game between a challenger, who runs the honest parties, and the adversary, following the game of \cite[Fig.~2]{cgrs23} with WSTS's key assignment added.  The adversary interacts with the honest parties through three oracles.
+
+\begin{definition}[Unforgeability game]\label{definition:game}
+  The game is parameterized by $(N_p, N_k, T, K, \mathcal{C})$ with $w(\mathcal{C}) < T$ and a DKG context string $\mathit{ctx}$.  It initializes $\mathit{Signed} \leftarrow \emptyset$, and gives the adversary the following oracles.
+  \begin{itemize}
+    \item \textbf{KeyGen}$(i)$, for honest $i$ not yet started: runs party $i$'s side of the DKG of Section~\ref{section:wsts-dkg}, concurrently with the other oracle calls.  The adversary supplies the messages of the corrupted parties and of the coordinator, subject to the channel assumptions above; in particular the coordinator's accepted set $\mathcal{A} \subseteq [1, N_p]$ is broadcast.  If party $i$ completes DKG, the oracle records its group public key as $Y_i$ and its shares $s_k$, $k \in K_i$; otherwise $Y_i = \bot$.
+    \item \textbf{Nonce}$(i, j)$, for honest $i$ with $Y_i \ne \bot$ and a fresh session index $j$: party $i$ samples $(d_{ij}, e_{ij})$ and returns $(D_{ij}, E_{ij})$.
+    \item \textbf{Sign}$(i, j, S_p, B, m)$, for honest $i$ with $Y_i \ne \bot$, an open session $j$ of party $i$, a set of parties $S_p \ni i$, a list $B$ of one commitment pair per party of $S_p$, and a message $m$: party $i$ closes session $j$, sets $S_k = \mathrm{keys}(S_p)$, computes $\rho_l = H_\rho(l, Y_i, m, B)$ for $l \in S_p$, $R = \sum_{l \in S_p} D_l + \rho_l \cdot E_l$ with $(D_l, E_l)$ taken from $B$, $c = H_c(Y_i, R, m)$, and returns
+      \begin{align}\label{equation:game-share}
+        z_{ij} = d_{ij} + \rho_i \cdot e_{ij} + c \cdot \sum_{k \in K_i} \lambda_k^{S_k} \cdot s_k.
+      \end{align}
+      The oracle adds $m$ to $\mathit{Signed}$.
+  \end{itemize}
+  The adversary wins if it outputs $(i^*, m^*, (R^*, z^*))$ with $Y_{i^*} \ne \bot$, $z^* \cdot G = R^* + H_c(Y_{i^*}, R^*, m^*) \cdot Y_{i^*}$, and $m^* \notin \mathit{Signed}$.  The scheme is $(\tau, q_s, q_h, \epsilon)$-unforgeable if every adversary running in time $\tau$ and making at most $q_s$ queries to each of \textbf{Nonce} and \textbf{Sign} and $q_h$ to each random oracle wins with probability at most $\epsilon$.
+\end{definition}
+
+\begin{rem}\label{remark:game}
+  Three features of the game deserve comment.  First, the honest party derives the key set $S_k$ from the public key assignment, never from the request; Section~\ref{section:wsts-sign} requires the same of implementations.  Second, the honest party does not check that $w(S_p) \ge T$, that $S_p \subseteq \mathcal{A}$, or that $B$ contains its own commitment; the proof does not need these checks, so omitting them from the game only strengthens the result.  Third, each nonce pair is used in at most one \textbf{Sign} query, which the reference implementation enforces by discarding the nonce after signing.  The winning condition is the weakest in the hierarchy of \cite{btz22}: a message counts as signed as soon as one honest party has produced a share for it.
+\end{rem}
+
+\subsection{
+  Theorem
+}
+
+\begin{thm}[Unforgeability of WSTS]\label{theorem:wsts}
+  Fix $(N_p, N_k, T, K, \mathcal{C})$ with $w(\mathcal{C}) < T$.  Let $\mathcal{F}$ be an adversary against the unforgeability of WSTS (plain variant) that runs in time $\tau$, makes at most $q_s$ queries to each of \textbf{Nonce} and \textbf{Sign} and at most $q_h$ queries to each random oracle, and wins with probability $\epsilon$.  Let
+  \begin{align}
+    q = (N_p + 2)(q_h + q_s) + 1
+  \end{align}
+  and assume $2^{\lambda - 1} \ge 32 N_p^3 q^2 / \epsilon^2$.  Then there is an algorithm $\mathcal{D}^*$ that solves AOMDL in $\mathbb{G}$ with probability
+  \begin{align}\label{equation:theorem-advantage}
+    \mathrm{Adv}^{\mathrm{aomdl}}_{\mathcal{D}^*, \mathbb{G}} \;\ge\; \frac{\epsilon^2}{16 N_p^2 q} - \frac{4q^2}{2^{\lambda}}
+  \end{align}
+  in expected time at most
+  \begin{align}\label{equation:theorem-time}
+    \tau' \;\le\; \frac{32 N_p^4 q^2}{\epsilon^2} \cdot \ln\!\left(\frac{16 N_p^3 q}{\epsilon^2}\right) \cdot (\tau_{\mathrm{game}} + \tau),
+  \end{align}
+  where $\tau_{\mathrm{game}}$ is the time to run the challenger of the game, excluding $\mathcal{F}$.
+\end{thm}
+
+The structure of the bound is that of \cite[Theorem~1]{cgrs23}, with the threshold $t$ of that statement replaced by $N_p$ and an additional factor $N_p^2$ in the advantage.  The multi-forking step extracts one proof of knowledge per corrupted party in the accepted set, of which there are at most $\min(T-1, N_p-1)$; the hash-query count $q$ grows by a factor $N_p$ because a single binding query of WSTS fixes $N_p$ binding values at once; and the extra $N_p^2$ is the price of guessing which honest party's constant term to embed the challenge in.  The guess is needed because FIRE lets the coordinator drop honest parties from the accepted set, so the embedding has to land in a party that survives.  With a DKG that either accepts every party or aborts, as in \cite{cgrs23}, the guess always lands and that factor disappears.
+
+\subsection{
+  Proof
+}
+
+\begin{proof}
+  We construct four algorithms in turn.  $\mathcal{B}$ wraps $\mathcal{F}$ and simulates the game to it, embedding a discrete logarithm challenge $X^*$ in the constant term of the polynomial of one honest party chosen at random, and answering signing queries with the oracle $\mathcal{O}_{\mathrm{dl}}$.  $\mathcal{C}$ forks $\mathcal{B}$ on the random oracle query of the forgery and extracts the group secret key $x$.  $\mathcal{D}$ multi-forks $\mathcal{C}$ on the proof-of-knowledge queries of the corrupted parties, extracts their constant terms, and from those and $x$ recovers $x^* = \log_G X^*$, after which it solves every nonce challenge.  $\mathcal{D}^*$ is $\mathcal{D}$ with all but one execution of $\mathcal{C}$ cut off after DKG, which brings the number of $\mathcal{O}_{\mathrm{dl}}$ queries below the number of challenges.
+
+  \paragraph{Notation.}  Let $\mathcal{C}_k = \mathrm{keys}(\mathcal{C})$ be the corrupted keys, so $|\mathcal{C}_k| = w(\mathcal{C}) \le T - 1$.  Fix once and for all a set $E$ of honest keys with $|\mathcal{C}_k \cup E| = T - 1$; this is possible because $N_k \ge T - 1$.  For $k \in [1, N_k]$ and the $T$ interpolation points $\{0\} \cup \mathcal{C}_k \cup E$, write $L_0(k)$ and $L_j(k)$, $j \in \mathcal{C}_k \cup E$, for the Lagrange basis polynomials evaluated at $k$, so that every polynomial $f$ of degree at most $T-1$ satisfies
+  \begin{align}\label{equation:proof-interpolation}
+    f(k) = L_0(k) \cdot f(0) + \sum_{j \in \mathcal{C}_k \cup E} L_j(k) \cdot f(j).
+  \end{align}
+
+  \paragraph{Algorithm $\mathcal{B}$.}  $\mathcal{B}$ takes as input a challenge $X^* \in \mathbb{G}$, challenges $U_{i,1}, \ldots, U_{i,2q_s} \in \mathbb{G}$ for every honest party $i$, a sequence $(h^{\mathrm{pok}}_1, \ldots, h^{\mathrm{pok}}_q)$ for $H_{\mathrm{pok}}$, and a sequence $(h_1, \ldots, h_q)$ shared by $H_\rho$ and $H_c$, all elements of $\mathbb{Z}_p$.  It has access to $\mathcal{O}_{\mathrm{dl}}$.  It keeps tables $\mathcal{T}_{\mathrm{pok}}$, $\mathcal{T}_\rho$ and $\mathcal{T}_c$ of programmed oracle values, counters into the two sequences, a set $\mathcal{Q}$ of the $\mathcal{O}_{\mathrm{dl}}$ queries it makes, and a flag $\mathit{Ev}_1$.  It runs $\mathcal{F}$ with random coins and answers its queries as follows.
+
+  \emph{Random oracle queries.}  A query $H_{\mathrm{pok}}(i, R, A, \mathit{ctx})$ not yet in $\mathcal{T}_{\mathrm{pok}}$ is assigned the next value of the first sequence.  A query $H_\rho(l, Y, m, B)$ with $B$ a well-formed commitment list over a set of parties $S_p \ni l$ is answered in a batch: for every $l' \in S_p$ in increasing order, $\mathcal{T}_\rho(l', Y, m, B)$ is assigned the next value of the second sequence if not yet assigned; then $\mathcal{B}$ computes $R = \sum_{l' \in S_p} D_{l'} + \rho_{l'} \cdot E_{l'}$ from $B$ and assigns $\mathcal{T}_c(Y, R, m)$ the next value if not yet assigned.  Any other $H_\rho$ query, and any $H_c$ query, is assigned the next value of the second sequence if not yet assigned.  The batch ensures that the challenge of every $(Y, m, B)$ is fixed no later than its binding values, which is what the forking argument below relies on; it is the per-party analogue of the internal $H_{\mathrm{sig}}$ query made inside $H_{\mathrm{non}}$ in \cite{cgrs23}.
+
+  \emph{Key generation.}  $\mathcal{B}$ picks a party $\kappa \in \mathcal{H}$ uniformly at random and simulates its DKG with the simulator of \cite[Fig.~7]{cgrs23}.  Every other honest party runs the protocol exactly as prescribed, with a polynomial that $\mathcal{B}$ chose and therefore knows in full.
+  \begin{enumerate}
+    \item For $\kappa$, set $A_{\kappa,0} = X^*$.  Sample $\tilde{f}_\kappa(j) \in \mathbb{Z}_p$ for every $j \in \mathcal{C}_k \cup E$; these are the values of $\kappa$'s polynomial at the corrupted and padding keys.  Compute the remaining coefficients $A_{\kappa,1}, \ldots, A_{\kappa,T-1}$ in the exponent from $A_{\kappa,0}$ and $\{\tilde{f}_\kappa(j) \cdot G\}$ by inverting the Vandermonde system of \eqref{equation:proof-interpolation}; this fixes $P_\kappa$ as the commitment to the unique polynomial $f_\kappa$ of degree $T-1$ with $f_\kappa(0) = x^*$ and $f_\kappa(j) = \tilde{f}_\kappa(j)$ for $j \in \mathcal{C}_k \cup E$.
+    \item Simulate $\kappa$'s proof of knowledge: sample $\tilde{s}_\kappa, \tilde{c}_\kappa \in \mathbb{Z}_p$, set $\tilde{R}_\kappa = \tilde{s}_\kappa \cdot G - \tilde{c}_\kappa \cdot X^*$, and program $\mathcal{T}_{\mathrm{pok}}(\kappa, \tilde{R}_\kappa, X^*, \mathit{ctx}) \leftarrow \tilde{c}_\kappa$.  If that entry was already assigned, set $\mathit{Ev}_1$ and stop.
+    \item Broadcast $(\kappa, P_\kappa, \tilde{R}_\kappa, \tilde{s}_\kappa)$, and send $\tilde{f}_\kappa(j)$ to the corrupted party holding key $j$ for every $j \in \mathcal{C}_k$.  $\kappa$'s shares for honest keys are not computed: their recipients are simulated by $\mathcal{B}$ and never need them, and over the secure channels the adversary observes only that a message was sent.  The other honest parties send their shares as the protocol prescribes.
+    \item Receive the public shares, proofs and private shares of the other parties and the coordinator's accepted set $\mathcal{A}$, and perform each honest party's checks exactly as the protocol prescribes, except that the private shares from $\kappa$ are deemed valid.  If any check fails or $i \notin \mathcal{A}$, party $i$ outputs $Y_i = \bot$; otherwise $Y_i = \sum_{j \in \mathcal{A}} A_{j,0}$.  If the first honest party to complete does so with $\kappa \notin \mathcal{A}$, $\mathcal{B}$ stops and returns $\bot$.
+  \end{enumerate}
+  By the broadcast assumption every honest party that completes has the same $\mathcal{A}$ and the same key, which we call $Y$.  Writing $x = \log_G Y$ and $a_{j,0}$ for the constant term of a party $j \ne \kappa$, known to $\mathcal{B}$ when $j$ is honest and unknown when $j$ is corrupted,
+  \begin{align}\label{equation:proof-key}
+    x = x^* + \sum_{l \in (\mathcal{A} \cap \mathcal{H}) \setminus \{\kappa\}} a_{l,0} + \sum_{j \in \mathcal{A} \cap \mathcal{C}} a_{j,0}.
+  \end{align}
+  The share of an honest key $k$ is $s_k = f_\kappa(k) + r_k$ with
+  \begin{align}\label{equation:proof-rest}
+    r_k = \sum_{l \in (\mathcal{A} \cap \mathcal{H}) \setminus \{\kappa\}} f_l(k) + \sum_{j \in \mathcal{A} \cap \mathcal{C}} f_j(k),
+  \end{align}
+  which $\mathcal{B}$ knows as a scalar: the honest polynomials it chose itself, and the corrupted parties' shares were sent to the honest holder of $k$, which $\mathcal{B}$ simulates, and verified against $P_j$.  By \eqref{equation:proof-interpolation} applied to $f_\kappa$,
+  \begin{align}\label{equation:proof-share-affine}
+    f_\kappa(k) = \gamma_k \cdot x^* + \delta_k, \qquad \gamma_k = L_0(k), \qquad \delta_k = \sum_{j \in \mathcal{C}_k \cup E} L_j(k) \cdot \tilde{f}_\kappa(j).
+  \end{align}
+  The split matters: $\gamma_k$ and $\delta_k$ are functions of $k$ and of $\mathcal{B}$'s own coins alone, while everything the adversary influences, the accepted set and the corrupted parties' shares, sits in $r_k$.  Consequently, for every honest party $i$ and key set $S_k \supseteq K_i$, the additive share $x_i(S_k) = \sum_{k \in K_i} \lambda^{S_k}_k s_k$ that party $i$ signs with is $\gamma_i(S_k) \cdot x^* + \delta_i(S_k) + r_i(S_k)$, where $\gamma_i(S_k) = \sum_{k \in K_i} \lambda^{S_k}_k \gamma_k$ and likewise for $\delta_i$ and $r_i$, and its public key $X_i(S_k) = x_i(S_k) \cdot G$ has the representation $\gamma_i(S_k) \cdot X^* + (\delta_i(S_k) + r_i(S_k)) \cdot G$.  Shares of corrupted keys are never needed.
+
+  The simulated DKG is distributed exactly as the real one.  $\kappa$'s constant term is uniform because $X^*$ is, $f_\kappa$ is uniform among polynomials of degree $T-1$ with that constant term because its values at the $T-1$ points $\mathcal{C}_k \cup E$ are independent and uniform, the other honest polynomials are generated honestly, and the simulated proof of knowledge is distributed as a real one unless $\mathit{Ev}_1$ occurs.  In particular every honest commitment is distributed identically, so $\kappa$ is independent of the adversary's view.  Since $\tilde{R}_\kappa$ is uniform in $\mathbb{G}$ and at most $q$ entries of $\mathcal{T}_{\mathrm{pok}}$ are ever assigned,
+  \begin{align}\label{equation:proof-ev1}
+    \Pr[\mathit{Ev}_1] \le \frac{q}{p} \le \frac{q}{2^{\lambda - 1}}.
+  \end{align}
+
+  \emph{Nonce queries.}  On the $j$-th \textbf{Nonce} query to honest party $i$, $\mathcal{B}$ returns $(D_{ij}, E_{ij}) = (U_{i,2j-1}, U_{i,2j})$.
+
+  \emph{Signing queries.}  On \textbf{Sign}$(i, j, S_p, B, m)$ for an open session $j$, $\mathcal{B}$ sets $S_k = \mathrm{keys}(S_p)$, obtains $\rho_i = \mathcal{T}_\rho(i, Y, m, B)$ and $c = \mathcal{T}_c(Y, R, m)$ through the batch procedure, queries
+  \begin{align}\label{equation:proof-dl-query}
+    \tilde{z}_{ij} = \mathcal{O}_{\mathrm{dl}}\big(U_{i,2j-1} + \rho_i \cdot U_{i,2j} + c \cdot (\gamma_i(S_k) \cdot X^* + \delta_i(S_k) \cdot G)\big),
+  \end{align}
+  supplying the representation $(c \cdot \delta_i(S_k); \; 1 \text{ at } U_{i,2j-1}, \; \rho_i \text{ at } U_{i,2j}, \; c \cdot \gamma_i(S_k) \text{ at } X^*)$, and returns $z_{ij} = \tilde{z}_{ij} + c \cdot r_i(S_k)$.  It records $(i, j, \tilde{z}_{ij}, \rho_i, c, S_k)$ in $\mathcal{Q}$, closes the session and adds $m$ to $\mathit{Signed}$.  By \eqref{equation:game-share}, \eqref{equation:proof-rest} and \eqref{equation:proof-share-affine} this is exactly the share an honest party would return.  The oracle input is a function of $(\rho_i, c, S_k)$ and of $\mathcal{B}$'s coins alone; the part of the share that depends on the DKG transcript, which the adversary may still be shaping after the forking point used below, is added outside the oracle.  This is what makes two executions that agree on $(\rho_i, c, S_k)$ make the same oracle query.
+
+  \emph{Output.}  When $\mathcal{F}$ halts with $(i^*, m^*, (R^*, z^*))$, $\mathcal{B}$ returns $\bot$ if $Y_{i^*} = \bot$, if the signature does not verify under $Y$ with $c^* = \mathcal{T}_c(Y, R^*, m^*)$ (assigning it if necessary), if $m^* \in \mathit{Signed}$, or if any proof of knowledge of a corrupted party in $\mathcal{A}$ fails to verify (it cannot, since an honest party completed).  Otherwise let $f_{\mathrm{sig}}$ be the index of $c^*$ in the second sequence, and let $F$ be the set of indices in the first sequence at which $\mathcal{T}_{\mathrm{pok}}(j, \tilde{R}_j, A_{j,0}, \mathit{ctx})$ was assigned for $j \in \mathcal{A} \cap \mathcal{C}$; these are distinct because the party index is part of the query.  $\mathcal{B}$ returns $f_{\mathrm{sig}}$ together with $\big(z^*, F, \{\tilde{s}_j\}_{j \in \mathcal{A} \cap \mathcal{C}}, \{a_{l,0}\}_{l \in (\mathcal{A} \cap \mathcal{H}) \setminus \{\kappa\}}, \mathcal{Q}\big)$.
+
+  \emph{Accounting.}  $H_{\mathrm{pok}}$ is assigned at most $q_h + N_p \le q$ values.  The second sequence is consumed by at most $q_h$ adversarial $H_\rho$ queries and $q_s$ signing queries, each assigning at most $N_p + 1$ values, plus $q_h$ adversarial $H_c$ queries and one final assignment, so at most $(N_p + 1)(q_h + q_s) + q_h + 1 \le q$ values.  $\mathcal{B}$ returns a non-$\bot$ output when $\mathcal{F}$ forges, $\kappa \in \mathcal{A}$, and $\mathit{Ev}_1$ does not occur.  A forgery only counts under a key some honest party completed with, so $\mathcal{A} \cap \mathcal{H} \neq \emptyset$ whenever $\mathcal{F}$ forges, and $\kappa$ is independent of $\mathcal{F}$'s view, so $\kappa \in \mathcal{A}$ with probability at least $1/|\mathcal{H}| \ge 1/N_p$ conditioned on any forging run.  (The conditioning is over the run in which $\mathcal{B}$ does not abort on $\kappa \notin \mathcal{A}$; that run is well defined, since then no honest share depends on $x^*$ and $\mathcal{B}$ could continue the simulation, and aborting only discards those runs.)  Unless $\mathit{Ev}_1$ occurs the simulation is perfect, so
+  \begin{align}\label{equation:proof-accb}
+    \mathrm{acc}_{\mathcal{B}} \ge \frac{\epsilon}{N_p} - \frac{q}{2^{\lambda - 1}}.
+  \end{align}
+
+  \paragraph{Algorithm $\mathcal{C}$.}  $\mathcal{C}$ takes the challenges and the first sequence as input, samples the second sequence, and runs $\mathrm{Fork}_{\mathcal{B}}$ on the index $f_{\mathrm{sig}}$ of the second sequence, relaying $\mathcal{O}_{\mathrm{dl}}$ queries.  If forking succeeds it obtains two forgeries from executions that are identical up to the assignment $\mathcal{T}_c(Y, R^*, m^*) \leftarrow h_{f_{\mathrm{sig}}}$, so both are on the same $(Y, R^*, m^*)$ with challenges $c^* = h_{f_{\mathrm{sig}}} \ne h'_{f_{\mathrm{sig}}} = c'^*$, and
+  \begin{align}\label{equation:proof-x}
+    x = \frac{z^* - z'^*}{c^* - c'^*}.
+  \end{align}
+  $\mathcal{C}$ returns $F$, the proof responses $\{\tilde{s}_j\}$ and the honest constant terms $\{a_{l,0}\}$, all from the first execution of $\mathcal{B}$, together with $\theta = (x, \{a_{l,0}\}, \mathcal{Q}, \mathcal{Q}')$, where $\mathcal{Q}'$ is the query set of the second execution.  When DKG completes after the forking point the two executions may have different accepted sets, both containing $\kappa$; the accepted set $\mathcal{A}$, and with it every index set in what follows, is that of the first execution, the one $F$ is taken from, and \eqref{equation:proof-key} holds there with that $\mathcal{A}$.  By Lemma~\ref{lemma:bn} and \eqref{equation:proof-accb}, using $\epsilon \le 1$ and the fact that the right-hand side of \eqref{equation:proof-accb} is non-negative under the hypothesis of the theorem,
+  \begin{align}\label{equation:proof-accc}
+    \mathrm{acc}_{\mathcal{C}} \;\ge\; \frac{\mathrm{acc}_{\mathcal{B}}^2}{q} - \frac{\mathrm{acc}_{\mathcal{B}}}{p} \;\ge\; \frac{\epsilon^2}{N_p^2 q} - \frac{3}{2^{\lambda - 1}} \;\ge\; \frac{\epsilon^2}{2 N_p^2 q},
+  \end{align}
+  where the last step uses the hypothesis $2^{\lambda-1} \ge 32 N_p^3 q^2 / \epsilon^2$.
+
+  \paragraph{Algorithm $\mathcal{D}$.}  $\mathcal{D}$ requests $X^*$ and the $2 q_s |\mathcal{H}|$ nonce challenges from $\mathcal{O}_{\mathrm{ch}}$, samples the first sequence, and runs $\mathrm{MFork}_{\mathcal{C}}$ on the index set $F$, relaying and caching $\mathcal{O}_{\mathrm{dl}}$ queries.  If $\mathcal{A} \cap \mathcal{C} = \emptyset$ then $F$ is empty, no extraction is needed, and $\mathcal{D}$ runs $\mathcal{C}$ once in place of $\mathrm{MFork}_{\mathcal{C}}$; the bounds below only improve.  Otherwise the hypothesis of Lemma~\ref{lemma:bcj} holds because $|F| \le N_p - 1$ and $\mathrm{acc}_{\mathcal{C}} \ge \epsilon^2 / 2 N_p^2 q$ give $8q|F| / \mathrm{acc}_{\mathcal{C}} \le 16 N_p^3 q^2 / \epsilon^2 < 2^{\lambda - 1} \le p$.  If it succeeds, $\mathcal{D}$ holds for every $j \in \mathcal{A} \cap \mathcal{C}$ two valid proofs $(\tilde{R}_j, \tilde{s}_j)$ and $(\tilde{R}_j, \tilde{s}'_j)$ on the same $A_{j,0}$ with distinct challenges, from which $a_{j,0} = (\tilde{s}_j - \tilde{s}'_j) / (\tilde{c}_j - \tilde{c}'_j)$.  By \eqref{equation:proof-key},
+  \begin{align}\label{equation:proof-xstar}
+    x^* = x - \sum_{l \in (\mathcal{A} \cap \mathcal{H}) \setminus \{\kappa\}} a_{l,0} - \sum_{j \in \mathcal{A} \cap \mathcal{C}} a_{j,0}.
+  \end{align}
+
+  It remains to solve the nonce challenges.  With $x^*$ known, $\gamma_i(S_k) \cdot x^* + \delta_i(S_k)$ is a known scalar for every $i$ and $S_k$; the corrupted parties' shares, which may differ between the two executions, no longer appear.  For each honest $i$ and session $j \le q_s$, $\mathcal{D}$ looks in $\mathcal{Q}$ and $\mathcal{Q}'$ for the tuples $(i, j, \tilde{z}, \rho, c, S_k)$ and $(i, j, \tilde{z}', \rho', c', S'_k)$ of the two executions of $\mathcal{B}$ inside the primary execution of $\mathcal{C}$.  Let $\mathit{Ev}_2$ be the event that two of the at most $2q$ values of the second sequence drawn across the two executions coincide; since they are uniform in $\mathbb{Z}_p$,
+  \begin{align}\label{equation:proof-ev2}
+    \Pr[\mathit{Ev}_2] \le \frac{(2q)^2}{2p} \le \frac{4q^2}{2^{\lambda}}.
+  \end{align}
+  We claim that unless $\mathit{Ev}_2$ occurs, whenever both tuples exist,
+  \begin{align}\label{equation:proof-star}
+    \rho = \rho' \;\Longrightarrow\; c = c' \;\wedge\; S_k = S'_k.
+  \end{align}
+  Suppose $\rho = \rho'$.  All values are distinct, so $\rho$ and $\rho'$ were handed out at the same index $f = f'$ of the second sequence, and since the values at indices $f_{\mathrm{sig}}$ and later are resampled in the second execution, $f < f_{\mathrm{sig}}$.  The executions are identical before $f_{\mathrm{sig}}$, so the assignments at index $f$ have the same key $(i, Y, m, B)$ in both, hence $m = m'$, $B = B'$ and $S_k = S'_k$.  That assignment happened inside the batch for $(Y, m, B)$, which also fixed $\mathcal{T}_c(Y, R, m)$ at some index $f_c$, either earlier, if it was already assigned, or within the batch's consecutive block of indices.  If $f_c < f_{\mathrm{sig}}$ then $c = c'$.  The forgery index $f_{\mathrm{sig}}$ is a $\mathcal{T}_c$ assignment, and the only $\mathcal{T}_c$ assignment in the block is $f_c$, so $f_c > f_{\mathrm{sig}} > f$ is impossible; and $f_c = f_{\mathrm{sig}}$ would mean $(Y, R^*, m^*) = (Y, R, m)$, so $m^* = m$ is a message with a signing query and $\mathcal{B}$ would have returned $\bot$.  This proves \eqref{equation:proof-star}.
+
+  Now, exactly as in \cite{cgrs23}: if the two tuples are identical, the cached oracle answered once and $\mathcal{D}$ makes a second query with fresh $(\rho', c', S'_k)$, $\rho' \ne \rho$; if one or both are missing, $\mathcal{D}$ makes the missing queries likewise; and if both exist and differ, then $\rho \ne \rho'$ by \eqref{equation:proof-star}: the oracle input \eqref{equation:proof-dl-query} is determined by $(\rho, c, S_k)$ and by $\mathcal{B}$'s coins, which the two executions share, so equal $(\rho, c, S_k)$ give equal oracle inputs and hence equal answers.  In every case $\mathcal{D}$ has two equations
+  \begin{align}
+    u_{i,2j-1} + \rho \cdot u_{i,2j} = \tilde{z} - c \cdot (\gamma_i(S_k) \cdot x^* + \delta_i(S_k)), \qquad u_{i,2j-1} + \rho' \cdot u_{i,2j} = \tilde{z}' - c' \cdot (\gamma_i(S'_k) \cdot x^* + \delta_i(S'_k))
+  \end{align}
+  with $\rho \ne \rho'$, and solves them for the discrete logarithms of $U_{i,2j-1}$ and $U_{i,2j}$.  By Lemma~\ref{lemma:bcj}, \eqref{equation:proof-accc} and \eqref{equation:proof-ev2},
+  \begin{align}\label{equation:proof-accd}
+    \mathrm{acc}_{\mathcal{D}} \;\ge\; \frac{\mathrm{acc}_{\mathcal{C}}}{8} - \Pr[\mathit{Ev}_2] \;\ge\; \frac{\epsilon^2}{16 N_p^2 q} - \frac{4q^2}{2^{\lambda}}.
+  \end{align}
+
+  \paragraph{Algorithm $\mathcal{D}^*$.}  $\mathcal{D}$ solves all of its challenges but makes too many $\mathcal{O}_{\mathrm{dl}}$ queries, because every execution of $\mathcal{C}$ started by $\mathrm{MFork}$ answers signing queries.  $\mathcal{D}^*$ is $\mathcal{D}$ with one change: in every execution of $\mathcal{C}$ other than the first, both executions of $\mathcal{B}$ are aborted at the moment the first honest party completes DKG, or when $\mathcal{F}$ halts if no honest party ever does.  At that moment the accepted set, the corrupted parties' proofs of knowledge and the outcome of their verification are all determined, so the output that $\mathrm{MFork}$ needs from the aborted execution, namely the index set and the proof responses $\tilde{s}'_j$, can be read off its state.  $\mathrm{MFork}$ counts such a rerun as successful for $f$ as soon as it reaches that point with a verified proof at index $f$ and $h'_f \ne h_f$.  That condition is implied by the acceptance condition of the full rerun, so the probability that $\mathrm{MFork}$ obtains a successful rerun for every $f \in F$ is at least the bound of Lemma~\ref{lemma:bcj}, and the response it reads off is the one the full rerun would have returned.  An honest party answers no signing query before it has completed DKG, so the aborted executions make no $\mathcal{O}_{\mathrm{dl}}$ queries at all.  Everything else $\mathcal{D}$ uses comes from the first execution of $\mathcal{C}$, which is unchanged.  Hence $\mathrm{acc}_{\mathcal{D}^*} = \mathrm{acc}_{\mathcal{D}}$.
+
+  $\mathcal{D}^*$ requests $2 q_s |\mathcal{H}| + 1$ challenges.  Its $\mathcal{O}_{\mathrm{dl}}$ queries all come from the two executions of $\mathcal{B}$ in the first execution of $\mathcal{C}$, each of which makes at most $q_s |\mathcal{H}|$ queries counting those emulated afterwards, so it makes at most $2 q_s |\mathcal{H}|$ queries and wins the AOMDL game whenever it does not return $\bot$.  This gives \eqref{equation:theorem-advantage}.  For the running time, $\mathrm{MFork}_{\mathcal{C}}$ runs at most $|F| \cdot k_{\max} \le 8 N_p^2 q / \mathrm{acc}_{\mathcal{C}} \cdot \ln(8 N_p / \mathrm{acc}_{\mathcal{C}})$ executions of $\mathcal{C}$, each of which runs $\mathcal{B}$ twice, and $\mathcal{B}$ runs in time about $\tau_{\mathrm{game}} + \tau$; substituting $\mathrm{acc}_{\mathcal{C}} \ge \epsilon^2 / 2 N_p^2 q$ gives \eqref{equation:theorem-time}.
+\end{proof}
+
+\begin{rem}[Where the weighting enters]
+  The weighting of WSTS is confined to three places in the proof: the padding set $E$, which replaces the FROST convention of corrupting exactly $T-1$ participants; the coefficients $\gamma_i(S_k)$ and $\delta_i(S_k)$ in \eqref{equation:proof-share-affine}, which sum over a party's keys where FROST has a single Lagrange term; and the fact that the key set $S_k$ in \eqref{equation:proof-star} is determined by the party set $S_p$ through the public key assignment.  Nothing else distinguishes an honest WSTS party from an honest FROST1 participant whose share happens to be $x_i(S_k)$, which is why the single nonce pair per party costs nothing in the argument.
+\end{rem}
+
+\begin{rem}[Variants and stronger notions]
+  The theorem is stated for the plain variant.  The BIP340 variants of Section~\ref{section:variants} negate the honest party's nonce contribution when $R$ has odd $y$ and the sign of $c \cdot x_i(S_k)$ depending on the parity of the (tweaked) group key; the simulation of \eqref{equation:proof-dl-query} accommodates both by adjusting the representation, and the challenge hash over x-only coordinates adds a sign case to \eqref{equation:proof-x}, since the two forgeries may have $R'^* = -R^*$.  We have not carried this bookkeeping through and leave it for a future revision.  Likewise, the stronger unforgeability notions of \cite{btz22}, in which a message counts as signed only once enough honest weight has signed it, require counting key weight rather than honest signers; FROST1 achieves the third tier of that hierarchy \cite[Theorem~5.4]{btz22} and we expect the same argument to carry over.
+\end{rem}
 
 \end{document}
-
