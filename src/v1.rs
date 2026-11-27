@@ -728,8 +728,13 @@ impl traits::Signer for Signer {
         key_ids: &[u32],
         nonces: &[PublicNonce],
     ) -> Vec<SignatureShare> {
-        let aggregate_nonce =
-            compute::aggregate_nonce(msg, self.group_key, key_ids, nonces).unwrap();
+        let aggregate_nonce = match compute::aggregate_nonce(msg, self.group_key, key_ids, nonces) {
+            Ok(aggregate_nonce) => aggregate_nonce,
+            Err(e) => {
+                warn!("Unable to compute the aggregate nonce ({e:?}): key IDs and nonces may disagree in length; refusing to sign");
+                return Vec::new();
+            }
+        };
         self.parties
             .iter()
             .map(|p| p.sign_precomputed(msg, key_ids, nonces, &aggregate_nonce))
@@ -744,8 +749,13 @@ impl traits::Signer for Signer {
         nonces: &[PublicNonce],
         merkle_root: Option<[u8; 32]>,
     ) -> Vec<SignatureShare> {
-        let aggregate_nonce =
-            compute::aggregate_nonce(msg, self.group_key, key_ids, nonces).unwrap();
+        let aggregate_nonce = match compute::aggregate_nonce(msg, self.group_key, key_ids, nonces) {
+            Ok(aggregate_nonce) => aggregate_nonce,
+            Err(e) => {
+                warn!("Unable to compute the aggregate nonce ({e:?}): key IDs and nonces may disagree in length; refusing to sign");
+                return Vec::new();
+            }
+        };
         let tweak = compute::tweak(&self.parties[0].group_key, merkle_root);
         self.parties
             .iter()
@@ -762,8 +772,13 @@ impl traits::Signer for Signer {
         key_ids: &[u32],
         nonces: &[PublicNonce],
     ) -> Vec<SignatureShare> {
-        let aggregate_nonce =
-            compute::aggregate_nonce(msg, self.group_key, key_ids, nonces).unwrap();
+        let aggregate_nonce = match compute::aggregate_nonce(msg, self.group_key, key_ids, nonces) {
+            Ok(aggregate_nonce) => aggregate_nonce,
+            Err(e) => {
+                warn!("Unable to compute the aggregate nonce ({e:?}): key IDs and nonces may disagree in length; refusing to sign");
+                return Vec::new();
+            }
+        };
         self.parties
             .iter()
             .map(|p| {

@@ -1199,6 +1199,12 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 warn!(signer_id = %nonce_response.signer_id, "Nonce response key_ids didn't match config");
                 return Ok(());
             }
+            // A repeated key ID collapses in the set comparison above, so compare lengths too:
+            // relaying it would hand signers more key IDs than nonces.
+            if nonce_response_key_ids.len() != nonce_response.key_ids.len() {
+                warn!(signer_id = %nonce_response.signer_id, "Nonce response key_ids contain duplicates");
+                return Ok(());
+            }
 
             for nonce in &nonce_response.nonces {
                 if !nonce.is_valid() {
@@ -4498,5 +4504,34 @@ pub mod test {
     #[test]
     fn sign_request_with_wrong_key_ids_v2() {
         sign_request_with_wrong_key_ids::<FireCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn v1_abort_inputs_are_refused_v1() {
+        let name = module_path!().split_once("::").unwrap().1;
+        crate::state_machine::coordinator::test::in_subprocess(
+            &format!("{name}::v1_abort_inputs_are_refused_v1"),
+            || {
+                crate::state_machine::coordinator::test::v1_abort_inputs_are_refused::<
+                    FireCoordinator<v1::Aggregator>,
+                    v1::Signer,
+                >(4, 2)
+            },
+        );
+    }
+
+    #[test]
+    fn v1_abort_inputs_are_refused_v2() {
+        let name = module_path!().split_once("::").unwrap().1;
+        crate::state_machine::coordinator::test::in_subprocess(
+            &format!("{name}::v1_abort_inputs_are_refused_v2"),
+            || {
+                crate::state_machine::coordinator::test::v1_abort_inputs_are_refused::<
+                    FireCoordinator<v2::Aggregator>,
+                    v2::Signer,
+                >(4, 2)
+            },
+        );
     }
 }
