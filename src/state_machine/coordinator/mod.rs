@@ -2458,4 +2458,96 @@ pub mod test {
             .all(|failure| matches!(failure, DkgFailure::PrivateSharesDigestMismatch)));
         assert!(malicious_signers.is_empty());
     }
+
+    /// An honest signer must derive the key set it interpolates over from the public key
+    /// assignment, not from the request (#259): every relayed `NonceResponse` must carry exactly
+    /// its signer's configured key IDs.  A request in which any of them is altered gets no
+    /// signature share from anyone, and the untampered request still signs.
+    pub fn sign_request_with_wrong_key_ids<
+        Coordinator: CoordinatorTrait,
+        SignerType: SignerTrait,
+    >(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        assert!(num_signers >= 3 && keys_per_signer >= 2);
+        let (mut coordinators, mut signers) =
+            run_dkg::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let mut rng = create_rng();
+
+        let nonce_request = coordinators[0]
+            .start_signing_round(
+                b"key ids come from the configuration",
+                SignatureType::Frost,
+                None,
+            )
+            .unwrap();
+        let (outbound, results) =
+            feedback_messages(&mut coordinators, &mut signers, &[nonce_request]);
+        assert!(results.is_empty());
+        assert_eq!(outbound.len(), 1);
+        let request = outbound[0].clone();
+        assert!(matches!(request.msg, Message::SignatureShareRequest(_)));
+
+        type Tamper = fn(&mut Vec<crate::net::NonceResponse>);
+        let tampers: [(&str, Tamper); 5] = [
+            ("a key dropped", |nrs| {
+                nrs[1].key_ids.pop();
+            }),
+            ("a key added from another signer", |nrs| {
+                let foreign = nrs[2].key_ids[0];
+                nrs[1].key_ids.push(foreign);
+            }),
+            ("a key replaced by another signer's", |nrs| {
+                nrs[1].key_ids[0] = nrs[2].key_ids[0];
+            }),
+            // The configured set, with one key repeated: only the duplicate check catches this.
+            ("a key repeated", |nrs| {
+                let repeated = nrs[1].key_ids[0];
+                nrs[1].key_ids.push(repeated);
+            }),
+            // The union of keys is unchanged, so only the per-signer comparison catches this.
+            ("two signers' key lists swapped", |nrs| {
+                let (a, b) = (nrs[1].key_ids.clone(), nrs[2].key_ids.clone());
+                nrs[1].key_ids = b;
+                nrs[2].key_ids = a;
+            }),
+        ];
+
+        for (name, tamper) in tampers {
+            let mut bad = request.clone();
+            let Message::SignatureShareRequest(ref mut msg) = bad.msg else {
+                unreachable!();
+            };
+            tamper(&mut msg.nonce_responses);
+            for signer in &signers {
+                let mut signer = signer.clone();
+                let result = signer.process(&bad, &mut rng);
+                assert!(
+                    matches!(result, Err(SignerError::InvalidNonceResponse)),
+                    "signer {} accepted a request with {name}: {result:?}",
+                    signer.signer_id
+                );
+            }
+        }
+
+        // The untampered request still gets a share from every signer in its signing set, and
+        // nothing from the others.
+        let Message::SignatureShareRequest(ref msg) = request.msg else {
+            unreachable!();
+        };
+        let signing_set: Vec<u32> = msg.nonce_responses.iter().map(|nr| nr.signer_id).collect();
+        for signer in signers.iter_mut() {
+            let outbound = signer.process(&request, &mut rng).unwrap();
+            if signing_set.contains(&signer.signer_id) {
+                assert!(
+                    matches!(outbound.as_slice(), [Message::SignatureShareResponse(_)]),
+                    "signer {} did not sign the untampered request: {outbound:?}",
+                    signer.signer_id
+                );
+            } else {
+                assert!(outbound.is_empty());
+            }
+        }
+    }
 }

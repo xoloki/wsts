@@ -1964,8 +1964,9 @@ pub mod test {
                     end_begin_digest_mismatch, equal_after_save_load, equivocating_private_shares,
                     equivocating_public_shares, feedback_messages, feedback_mutated_messages,
                     gen_nonces, invalid_nonce, new_coordinator, private_begin_digest_mismatch,
-                    run_dkg, run_dkg_sign, setup, setup_with_timeouts, start_dkg_round,
-                    start_signing_round, verify_packet_sigs,
+                    run_dkg, run_dkg_sign, setup, setup_with_timeouts,
+                    sign_request_with_wrong_key_ids, start_dkg_round, start_signing_round,
+                    verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
             },
@@ -4486,5 +4487,16 @@ pub mod test {
     #[test]
     fn end_begin_digest_mismatch_v2() {
         end_begin_digest_mismatch::<FireCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn sign_request_with_wrong_key_ids_v1() {
+        sign_request_with_wrong_key_ids::<FireCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn sign_request_with_wrong_key_ids_v2() {
+        sign_request_with_wrong_key_ids::<FireCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
     }
 }
