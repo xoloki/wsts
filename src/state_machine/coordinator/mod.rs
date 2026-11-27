@@ -2458,4 +2458,263 @@ pub mod test {
             .all(|failure| matches!(failure, DkgFailure::PrivateSharesDigestMismatch)));
         assert!(malicious_signers.is_empty());
     }
+
+    /// An honest signer must derive the key set it interpolates over from the public key
+    /// assignment, not from the request (#259): every relayed `NonceResponse` must carry exactly
+    /// its signer's configured key IDs.  A request in which any of them is altered gets no
+    /// signature share from anyone, and the untampered request still signs.
+    pub fn sign_request_with_wrong_key_ids<
+        Coordinator: CoordinatorTrait,
+        SignerType: SignerTrait,
+    >(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        assert!(num_signers >= 3 && keys_per_signer >= 2);
+        let (mut coordinators, mut signers) =
+            run_dkg::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let mut rng = create_rng();
+
+        let nonce_request = coordinators[0]
+            .start_signing_round(
+                b"key ids come from the configuration",
+                SignatureType::Frost,
+                None,
+            )
+            .unwrap();
+        let (outbound, results) =
+            feedback_messages(&mut coordinators, &mut signers, &[nonce_request]);
+        assert!(results.is_empty());
+        assert_eq!(outbound.len(), 1);
+        let request = outbound[0].clone();
+        assert!(matches!(request.msg, Message::SignatureShareRequest(_)));
+
+        type Tamper = fn(&mut Vec<crate::net::NonceResponse>);
+        let tampers: [(&str, Tamper); 5] = [
+            ("a key dropped", |nrs| {
+                nrs[1].key_ids.pop();
+            }),
+            ("a key added from another signer", |nrs| {
+                let foreign = nrs[2].key_ids[0];
+                nrs[1].key_ids.push(foreign);
+            }),
+            ("a key replaced by another signer's", |nrs| {
+                nrs[1].key_ids[0] = nrs[2].key_ids[0];
+            }),
+            // The configured set, with one key repeated: only the duplicate check catches this.
+            ("a key repeated", |nrs| {
+                let repeated = nrs[1].key_ids[0];
+                nrs[1].key_ids.push(repeated);
+            }),
+            // The union of keys is unchanged, so only the per-signer comparison catches this.
+            ("two signers' key lists swapped", |nrs| {
+                let (a, b) = (nrs[1].key_ids.clone(), nrs[2].key_ids.clone());
+                nrs[1].key_ids = b;
+                nrs[2].key_ids = a;
+            }),
+        ];
+
+        for (name, tamper) in tampers {
+            let mut bad = request.clone();
+            let Message::SignatureShareRequest(ref mut msg) = bad.msg else {
+                unreachable!();
+            };
+            tamper(&mut msg.nonce_responses);
+            for signer in &signers {
+                let mut signer = signer.clone();
+                let result = signer.process(&bad, &mut rng);
+                assert!(
+                    matches!(result, Err(SignerError::InvalidNonceResponse)),
+                    "signer {} accepted a request with {name}: {result:?}",
+                    signer.signer_id
+                );
+            }
+        }
+
+        // The untampered request still gets a share from every signer in its signing set, and
+        // nothing from the others.
+        let Message::SignatureShareRequest(ref msg) = request.msg else {
+            unreachable!();
+        };
+        let signing_set: Vec<u32> = msg.nonce_responses.iter().map(|nr| nr.signer_id).collect();
+        for signer in signers.iter_mut() {
+            let outbound = signer.process(&request, &mut rng).unwrap();
+            if signing_set.contains(&signer.signer_id) {
+                assert!(
+                    matches!(outbound.as_slice(), [Message::SignatureShareResponse(_)]),
+                    "signer {} did not sign the untampered request: {outbound:?}",
+                    signer.signer_id
+                );
+            } else {
+                assert!(outbound.is_empty());
+            }
+        }
+    }
+
+    /// Run `body` in a child copy of this test binary, filtered to `test_name`, and assert that it
+    /// exited cleanly.  An abort (a panic inside a callback that cannot unwind) kills the whole
+    /// process, which `catch_unwind` cannot observe; a child process turns it into an ordinary
+    /// failure of this test.  `test_name` is the test's path as the harness prints it.  The child
+    /// is this same binary, so it already has the parent's features (e.g. `with_v1`); there is
+    /// nothing to pass.
+    pub fn in_subprocess(test_name: &str, body: impl FnOnce()) {
+        const CHILD: &str = "WSTS_TEST_IN_SUBPROCESS";
+        if std::env::var_os(CHILD).is_some() {
+            body();
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test_name, "--exact", "--test-threads=1"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "{test_name} failed in a subprocess: {status}"
+        );
+    }
+
+    /// Inputs that used to abort a v1 signer process, or make any signer interpolate over a key
+    /// set other than the configured one, are refused instead.
+    ///
+    /// Part 1, a coordinator tampering with the relayed `SignatureShareRequest`: every change to
+    /// a relayed `NonceResponse`'s key IDs is refused by every signer, and a dropped nonce, which
+    /// leaves the key IDs intact, no longer aborts a v1 signer (it used to give `multimult` more
+    /// scalars than points inside a callback that cannot unwind).  Part 2, a malicious signer
+    /// repeating one of its own key IDs: the coordinator must not relay it.
+    ///
+    /// Run it under `in_subprocess`: on unfixed code the failure is a process abort.
+    ///
+    /// Each of v1's three signing paths computes the aggregate nonce on its own, so every part is
+    /// run for Frost, Schnorr and Taproot requests.
+    pub fn v1_abort_inputs_are_refused<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+    ) {
+        for signature_type in [
+            SignatureType::Frost,
+            SignatureType::Schnorr,
+            SignatureType::Taproot(None),
+        ] {
+            v1_abort_inputs_are_refused_for::<Coordinator, SignerType>(
+                num_signers,
+                keys_per_signer,
+                signature_type,
+            );
+        }
+    }
+
+    fn v1_abort_inputs_are_refused_for<Coordinator: CoordinatorTrait, SignerType: SignerTrait>(
+        num_signers: u32,
+        keys_per_signer: u32,
+        signature_type: SignatureType,
+    ) {
+        assert!(num_signers >= 3 && keys_per_signer >= 2);
+        let mut rng = create_rng();
+
+        // Part 1: the coordinator tampers with the relayed request.
+        let (mut coordinators, mut signers) =
+            run_dkg::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let nonce_request = coordinators[0]
+            .start_signing_round(b"v1 abort inputs", signature_type, None)
+            .unwrap();
+        let (outbound, _) = feedback_messages(&mut coordinators, &mut signers, &[nonce_request]);
+        assert_eq!(outbound.len(), 1);
+        let request = outbound[0].clone();
+        assert!(matches!(request.msg, Message::SignatureShareRequest(_)));
+
+        type Tamper = fn(&mut Vec<crate::net::NonceResponse>);
+        let key_id_tampers: [(&str, Tamper); 5] = [
+            ("a key dropped", |nrs| {
+                nrs[1].key_ids.pop();
+            }),
+            ("a key added from another signer", |nrs| {
+                let foreign = nrs[2].key_ids[0];
+                nrs[1].key_ids.push(foreign);
+            }),
+            ("a key replaced by another signer's", |nrs| {
+                nrs[1].key_ids[0] = nrs[2].key_ids[0];
+            }),
+            ("a key repeated", |nrs| {
+                let repeated = nrs[1].key_ids[0];
+                nrs[1].key_ids.push(repeated);
+            }),
+            ("two signers' key lists swapped", |nrs| {
+                let (a, b) = (nrs[1].key_ids.clone(), nrs[2].key_ids.clone());
+                nrs[1].key_ids = b;
+                nrs[2].key_ids = a;
+            }),
+        ];
+        for (name, tamper) in key_id_tampers {
+            let mut bad = request.clone();
+            let Message::SignatureShareRequest(ref mut msg) = bad.msg else {
+                unreachable!();
+            };
+            tamper(&mut msg.nonce_responses);
+            for signer in &signers {
+                let mut signer = signer.clone();
+                let result = signer.process(&bad, &mut rng);
+                assert!(
+                    matches!(result, Err(SignerError::InvalidNonceResponse)),
+                    "signer {} accepted a {signature_type:?} request with {name}: {result:?}",
+                    signer.signer_id
+                );
+            }
+        }
+
+        // A dropped nonce keeps the key IDs equal to the configuration, so only the crash-site
+        // guard stops it.  Reaching the end of this loop is the assertion.
+        let mut dropped = request.clone();
+        let Message::SignatureShareRequest(ref mut msg) = dropped.msg else {
+            unreachable!();
+        };
+        msg.nonce_responses[1].nonces.pop();
+        for signer in &signers {
+            let mut signer = signer.clone();
+            let _ = signer.process(&dropped, &mut rng);
+        }
+
+        // Part 2: a malicious signer repeats one of its own key IDs.
+        let (mut coordinators, mut signers) =
+            run_dkg::<Coordinator, SignerType>(num_signers, keys_per_signer);
+        let nonce_request = coordinators[0]
+            .start_signing_round(b"v1 abort inputs", signature_type, None)
+            .unwrap();
+        let (outbound, _) = feedback_mutated_messages_with_errors(
+            &mut coordinators,
+            &mut signers,
+            &[nonce_request],
+            |signer, msgs| {
+                if signer.signer_id != 0 {
+                    return msgs;
+                }
+                msgs.into_iter()
+                    .map(|mut packet| {
+                        if let Message::NonceResponse(ref mut nr) = packet.msg {
+                            let repeated = nr.key_ids[0];
+                            nr.key_ids.push(repeated);
+                        }
+                        packet
+                    })
+                    .collect()
+            },
+        )
+        .unwrap();
+        for packet in &outbound {
+            if let Message::SignatureShareRequest(ref msg) = packet.msg {
+                for nr in &msg.nonce_responses {
+                    let unique: HashSet<u32> = nr.key_ids.iter().copied().collect();
+                    assert_eq!(
+                        unique.len(),
+                        nr.key_ids.len(),
+                        "the coordinator relayed signer {}'s repeated key ID in a {signature_type:?} round",
+                        nr.signer_id
+                    );
+                }
+            }
+        }
+        for signer in signers.iter_mut() {
+            let _ = signer.process_inbound_messages(&outbound, &mut rng);
+        }
+    }
 }
