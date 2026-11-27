@@ -891,6 +891,34 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             }
         }
 
+        // The key set this signer interpolates over must come from the public key assignment, not
+        // from the request: the nested NonceResponses are relayed by the coordinator.  So every
+        // NonceResponse must carry exactly the configured key IDs of its signer.  The request's
+        // order is kept rather than re-derived, because v1 pairs key IDs with nonces by position.
+        for nonce_response in &sign_request.nonce_responses {
+            let Some(configured) = self
+                .public_keys
+                .signer_key_ids
+                .get(&nonce_response.signer_id)
+            else {
+                warn!(
+                    signer_id = %self.signer_id,
+                    nonce_signer_id = %nonce_response.signer_id,
+                    "SignatureShareRequest carries a NonceResponse from a signer with no configured key_ids"
+                );
+                return Err(Error::InvalidNonceResponse);
+            };
+            let claimed: HashSet<u32> = nonce_response.key_ids.iter().copied().collect();
+            if claimed.len() != nonce_response.key_ids.len() || &claimed != configured {
+                warn!(
+                    signer_id = %self.signer_id,
+                    nonce_signer_id = %nonce_response.signer_id,
+                    "SignatureShareRequest carries a NonceResponse whose key_ids differ from that signer's configured key_ids"
+                );
+                return Err(Error::InvalidNonceResponse);
+            }
+        }
+
         debug!(signer_id = %self.signer_id, "received a valid SignatureShareRequest");
 
         if signer_id_set.contains(&self.signer_id) {

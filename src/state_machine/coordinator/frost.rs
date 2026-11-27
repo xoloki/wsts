@@ -1375,8 +1375,9 @@ pub mod test {
                     bad_signature_share_request, btc_sign_verify, check_signature_shares,
                     coordinator_state_machine, empty_private_shares, empty_public_shares,
                     equal_after_save_load, feedback_messages, feedback_mutated_messages,
-                    invalid_nonce, new_coordinator, run_dkg, run_dkg_sign, setup, start_dkg_round,
-                    start_signing_round, verify_packet_sigs,
+                    invalid_nonce, new_coordinator, run_dkg, run_dkg_sign, setup,
+                    sign_request_with_wrong_key_ids, start_dkg_round, start_signing_round,
+                    verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
             },
@@ -2127,5 +2128,16 @@ pub mod test {
     #[test]
     fn btc_sign_verify_v2() {
         btc_sign_verify::<FrostCoordinator<v2::Aggregator>, v2::Signer>(5, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn sign_request_with_wrong_key_ids_v1() {
+        sign_request_with_wrong_key_ids::<FrostCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn sign_request_with_wrong_key_ids_v2() {
+        sign_request_with_wrong_key_ids::<FrostCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
     }
 }

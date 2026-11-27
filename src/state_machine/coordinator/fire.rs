@@ -1850,7 +1850,8 @@ pub mod test {
                     coordinator_state_machine, empty_private_shares, empty_public_shares,
                     equal_after_save_load, feedback_messages, feedback_mutated_messages,
                     gen_nonces, invalid_nonce, new_coordinator, run_dkg, run_dkg_sign, setup,
-                    setup_with_timeouts, start_dkg_round, start_signing_round, verify_packet_sigs,
+                    setup_with_timeouts, sign_request_with_wrong_key_ids, start_dkg_round,
+                    start_signing_round, verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
             },
@@ -4327,5 +4328,16 @@ pub mod test {
     #[test]
     fn btc_sign_verify_v2() {
         btc_sign_verify::<FireCoordinator<v2::Aggregator>, v2::Signer>(5, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn sign_request_with_wrong_key_ids_v1() {
+        sign_request_with_wrong_key_ids::<FireCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn sign_request_with_wrong_key_ids_v2() {
+        sign_request_with_wrong_key_ids::<FireCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
     }
 }
