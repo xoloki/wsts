@@ -111,7 +111,17 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                     return Ok((Some(packet), None));
                 }
                 State::DkgPublicGather => {
-                    self.gather_public_shares(packet)?;
+                    if let Err(error) = self.gather_public_shares(packet) {
+                        if let Error::DkgPublicSharesInvalid(signer_id) = error {
+                            return Ok((
+                                None,
+                                Some(OperationResult::DkgError(DkgError::DkgPublicSharesInvalid(
+                                    signer_id,
+                                ))),
+                            ));
+                        }
+                        return Err(error);
+                    }
                     if self.state == State::DkgPublicGather {
                         // We need more data
                         return Ok((None, None));
@@ -388,7 +398,11 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                         %party_id,
                         "DkgPublicShares rejected: bad polynomial commitment"
                     );
-                    return Ok(());
+                    // Fail the round rather than keep waiting for this signer. FROST has no
+                    // timeouts, so returning quietly here would leave the round outstanding
+                    // forever with only this log line to explain it.
+                    self.move_to(State::Idle)?;
+                    return Err(Error::DkgPublicSharesInvalid(dkg_public_shares.signer_id));
                 }
             }
 
@@ -1327,7 +1341,7 @@ pub mod test {
 
         // A second round in which signer 0 empties the polynomial inside its commitment.
         let message = coordinators[0].start_dkg_round(None).unwrap();
-        let (outbound, _) = feedback_mutated_messages(
+        let (outbound, results) = feedback_mutated_messages(
             &mut coordinators,
             &mut signers,
             &[message],
@@ -1352,6 +1366,22 @@ pub mod test {
                     })
                     .collect()
             },
+        );
+
+        // The refusal is reported, naming the sender, rather than leaving the round waiting on
+        // signer 0 with only a log line. Before #251 this list was empty and FROST, which has no
+        // timeouts, sat in DkgPublicGather indefinitely.
+        assert!(
+            results.iter().any(|r| matches!(
+                r,
+                OperationResult::DkgError(DkgError::DkgPublicSharesInvalid(0))
+            )),
+            "the refusal must be reported against signer 0; got {results:?}"
+        );
+        assert_eq!(
+            coordinators[0].get_state(),
+            State::Idle,
+            "a refused round must not be left in flight"
         );
 
         // Drive the round to quiescence; the failure surfaces several message rounds later.
@@ -1630,34 +1660,6 @@ pub mod test {
 
         coordinator.start_dkg_round(None).unwrap(); // = State::DkgPublicGather;
 
-        // A malformed commitment is refused at receipt and leaves nothing cached. This used to
-        // be accepted, and the empty polynomial then sat in `party_polynomials` until a signing
-        // round indexed it.
-        let malformed = DkgPublicShares {
-            dkg_id: 1,
-            signer_id: 0,
-            comms: vec![(
-                0,
-                PolyCommitment {
-                    id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
-                    poly: vec![],
-                },
-            )],
-            kex_public_key: Point::from(Scalar::random(&mut rng)),
-            kex_proof: schnorr::Proof {
-                R: Point::new(),
-                s: Scalar::new(),
-            },
-        };
-        coordinator
-            .gather_public_shares(&Packet {
-                msg: Message::DkgPublicShares(malformed),
-                sig: Default::default(),
-            })
-            .unwrap();
-        assert_eq!(0, coordinator.dkg_public_shares.len());
-        assert_eq!(0, coordinator.party_polynomials.len());
-
         // A well-formed one is gathered. The proof of knowledge is over poly[0], so the
         // commitment has to be built around a secret we hold.
         let threshold = coordinator.config.threshold as usize;
@@ -1727,6 +1729,49 @@ pub mod test {
                 .unwrap()
                 .1
                 .clone()
+        );
+
+        // A malformed commitment is refused at receipt, naming the sender, and leaves nothing
+        // cached. This used to be accepted, and the empty polynomial then sat in
+        // `party_polynomials` until a signing round indexed it.
+        //
+        // From signer 1, not 0: validation runs after the duplicate check, so a second message
+        // from a signer already recorded is suppressed before it is ever validated.
+        let malformed = DkgPublicShares {
+            dkg_id: 1,
+            signer_id: 1,
+            comms: vec![(
+                0,
+                PolyCommitment {
+                    id: ID::new(&Scalar::new(), &Scalar::new(), &ctx, &mut rng),
+                    poly: vec![],
+                },
+            )],
+            kex_public_key: Point::from(Scalar::random(&mut rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::new(),
+                s: Scalar::new(),
+            },
+        };
+        let err = coordinator
+            .gather_public_shares(&Packet {
+                msg: Message::DkgPublicShares(malformed),
+                sig: Default::default(),
+            })
+            .expect_err("a malformed commitment must be refused, naming the sender");
+        assert!(
+            matches!(err, Error::DkgPublicSharesInvalid(1)),
+            "expected DkgPublicSharesInvalid(1), got {err:?}"
+        );
+        assert_eq!(
+            1,
+            coordinator.dkg_public_shares.len(),
+            "signer 0's valid share stays; signer 1's refused one is not added"
+        );
+        assert_eq!(
+            coordinator.get_state(),
+            State::Idle,
+            "a refused message must end the round"
         );
     }
 
