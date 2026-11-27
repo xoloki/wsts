@@ -147,6 +147,13 @@ pub fn aggregate_nonce(
     party_ids: &[u32],
     nonces: &[PublicNonce],
 ) -> Result<Point, PointError> {
+    // One nonce per party ID.  With more IDs than nonces the multi-exponentiation below would be
+    // handed more scalars than points and index out of bounds inside a C callback that cannot
+    // unwind, aborting the process; refuse the input instead.  The multi-exponentiation is not
+    // attempted, `MultiMultFailed` is only the closest error `PointError` has.
+    if party_ids.len() != nonces.len() {
+        return Err(PointError::MultiMultFailed);
+    }
     let commitment_list: Vec<(Scalar, Compressed, Compressed)> = party_ids
         .iter()
         .zip(nonces)
