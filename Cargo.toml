@@ -17,8 +17,7 @@ categories = ["cryptography"]
 exclude = [".github/", ".doc/", "CNAME", "coverage.sh", "rust-toolchain.toml"]
 
 [features]
-default = ["with_p256k1_bindgen"]
-with_p256k1_bindgen = ["p256k1/with_bindgen"]
+default = []
 with_v1 = []
 testing = ["dep:bitcoin", "dep:bitcoinconsensus", "dep:tracing-subscriber"]
 
@@ -34,7 +33,13 @@ hex = "0.4.3"
 num-traits = "0.2"
 polynomial = { version = "0.2.5", features = ["serde"] }
 rand_core = "0.6"
-p256k1 = { version = "7.2", default-features = false }
+# Not used directly. It is here so that resolution *fails* for anyone who builds this
+# without the [patch.crates-io] section below: the `k256` revision this depends on needs
+# wnaf 0.14.3, which is unpublished, and the highest released 0.14.1 miscomputes w-NAF
+# digits at window widths 7 and 8. Silently building against 0.14.1 would be worse than
+# not building. Remove this once the upstream PR lands and k256 comes from crates.io.
+wnaf = "0.14.3"
+k256 = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 thiserror = "1.0"
@@ -47,6 +52,10 @@ bitcoinconsensus = { version = "0.106.0", default-features = false }
 criterion = "0.5.1"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 rand = "0.8.5"
+ciborium = "0.2"
+# Only as the reference implementation the `curve_k256` differential tests compare
+# against. Not a runtime dependency, so building wsts does not need a C toolchain.
+p256k1 = { version = "7.2", default-features = false, features = ["with_bindgen"] }
 rand_chacha = "0.3.1"
 
 [[bench]]
@@ -65,3 +74,13 @@ crate-type = ["lib"]   # The crate types to generate.
 
 [package.metadata.docs.rs]
 all-features = true
+
+# The k256 fork's bucketed-Pippenger MSM depends on unpublished changes in its sibling
+# crates, which its own workspace supplies via [patch.crates-io]. Those patches do not
+# carry through a git dependency, so they are mirrored here, pinned to the same rev.
+# All of this goes away when the work lands upstream and k256 is taken from crates.io.
+[patch.crates-io]
+hash2curve = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }
+primefield = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }
+primeorder = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }
+wnaf = { git = "https://github.com/xoloki/elliptic-curves", rev = "2aff34448610d715c7ce76ef1ee06d3523dc1bf1" }

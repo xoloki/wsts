@@ -322,7 +322,7 @@ pub fn check_public_shares(poly_comm: &PolyCommitment, threshold: usize, ctx: &[
     poly_comm.poly.len() == threshold && poly_comm.verify(ctx)
 }
 
-/// An implementation of p256k1's MultiMult trait that allows fast checking of DKG private shares
+/// An implementation of the MultiMult trait that allows fast checking of DKG private shares
 /// We convert a set of checked polynomial evaluations into a single giant multimult
 /// These evaluations take the form of s * G == \Sum{k=0}{T+1}(a_k * x^k) where the a vals are the coeffs of the polys
 /// There is 1 share per poly, N polys, and each poly is degree T-1 (so T coeffs)
