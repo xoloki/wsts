@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "wsts"
-version = "15.0.1"
+version = "15.0.2"
 dependencies = [
  "aes-gcm",
  "bitcoin",
