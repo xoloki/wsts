@@ -8,9 +8,10 @@ use crate::{
     curve::{ecdsa, point::Point},
     errors::AggregatorError,
     net::{
-        DkgBegin, DkgEnd, DkgEndBegin, DkgPrivateBegin, DkgPrivateShares, DkgPrivateSharesDone,
-        DkgPublicShares, DkgPublicSharesDone, DkgStatus, Message, NonceRequest, NonceResponse,
-        Packet, Signable, SignatureShareRequest, SignatureType,
+        dkg_private_shares_digest, dkg_public_shares_digest, DkgBegin, DkgEnd, DkgEndBegin,
+        DkgPrivateBegin, DkgPrivateShares, DkgPrivateSharesDone, DkgPublicShares,
+        DkgPublicSharesDone, DkgStatus, Message, NonceRequest, NonceResponse, Packet, Signable,
+        SignatureShareRequest, SignatureType,
     },
     state_machine::{
         coordinator::{
@@ -34,7 +35,15 @@ pub struct Coordinator<Aggregator: AggregatorTrait> {
     /// current signing iteration ID
     current_sign_iter_id: u64,
     dkg_public_shares: BTreeMap<u32, DkgPublicShares>,
+    /// signers whose DkgPublicSharesDoneAck carried a different public shares digest
+    dkg_public_shares_mismatched_signer_ids: HashSet<u32>,
+    /// digest of the public shares accepted when DkgPublicSharesDone was sent
+    dkg_public_shares_digest: [u8; 32],
     dkg_private_shares: BTreeMap<u32, DkgPrivateShares>,
+    /// digest of the private shares accepted when DkgPrivateSharesDone was sent
+    dkg_private_shares_digest: [u8; 32],
+    /// signers whose DkgPrivateSharesDoneAck carried a different private shares digest
+    dkg_private_shares_mismatched_signer_ids: HashSet<u32>,
     dkg_end_messages: BTreeMap<u32, DkgEnd>,
     party_polynomials: HashMap<u32, PolyCommitment>,
     public_nonces: BTreeMap<u32, NonceResponse>,
@@ -113,7 +122,17 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                     return Ok((Some(packet), None));
                 }
                 State::DkgPublicSharesDoneGather => {
-                    self.gather_public_shares_done_ack(packet)?;
+                    if let Err(error) = self.gather_public_shares_done_ack(packet) {
+                        if let Error::DkgPublicSharesMismatch(signer_ids) = error {
+                            return Ok((
+                                None,
+                                Some(OperationResult::DkgError(
+                                    DkgError::DkgPublicSharesMismatch(signer_ids),
+                                )),
+                            ));
+                        }
+                        return Err(error);
+                    }
                     if self.state == State::DkgPublicSharesDoneGather {
                         // We need more data
                         return Ok((None, None));
@@ -135,7 +154,17 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                     return Ok((Some(packet), None));
                 }
                 State::DkgPrivateSharesDoneGather => {
-                    self.gather_private_shares_done_ack(packet)?;
+                    if let Err(error) = self.gather_private_shares_done_ack(packet) {
+                        if let Error::DkgPrivateSharesMismatch(signer_ids) = error {
+                            return Ok((
+                                None,
+                                Some(OperationResult::DkgError(
+                                    DkgError::DkgPrivateSharesMismatch(signer_ids),
+                                )),
+                            ));
+                        }
+                        return Err(error);
+                    }
                     if self.state == State::DkgPrivateSharesDoneGather {
                         // We need more data
                         return Ok((None, None));
@@ -248,6 +277,10 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
     /// Ask signers to send DKG public shares
     pub fn start_public_shares(&mut self) -> Result<Packet, Error> {
         self.dkg_public_shares.clear();
+        self.dkg_public_shares_mismatched_signer_ids.clear();
+        self.dkg_public_shares_digest = Default::default();
+        self.dkg_private_shares_digest = Default::default();
+        self.dkg_private_shares_mismatched_signer_ids.clear();
         self.party_polynomials.clear();
         self.ids_to_await = (0..self.config.num_signers).collect();
         info!(
@@ -279,6 +312,7 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
             dkg_id: self.current_dkg_id,
             key_ids: (1..self.config.num_keys + 1).collect(),
             signer_ids: (0..self.config.num_signers).collect(),
+            public_shares_digest: self.dkg_public_shares_digest,
         };
         let dkg_private_begin_msg = Packet {
             sig: dkg_begin
@@ -301,6 +335,7 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
             dkg_id: self.current_dkg_id,
             key_ids: (0..self.config.num_keys).collect(),
             signer_ids: (0..self.config.num_signers).collect(),
+            private_shares_digest: self.dkg_private_shares_digest,
         };
         let dkg_end_begin_msg = Packet {
             sig: dkg_begin.sign(&self.config.message_private_key).expect(""),
@@ -382,6 +417,9 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
     pub fn send_public_shares_done(&mut self) -> Result<Packet, Error> {
         let signer_ids: Vec<u32> = self.dkg_public_shares.keys().cloned().collect();
         self.ids_to_await = signer_ids.iter().cloned().collect();
+        // The accepted set is fixed from here on, so digest it once rather than once per ack.
+        self.dkg_public_shares_digest =
+            dkg_public_shares_digest(self.current_dkg_id, &self.dkg_public_shares);
         info!(dkg_id = %self.current_dkg_id, "Sending DkgPublicSharesDone");
         let msg = DkgPublicSharesDone {
             dkg_id: self.current_dkg_id,
@@ -406,6 +444,17 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 warn!(signer_id = %ack.signer_id, "No public key in config");
                 return Ok(());
             }
+            if self.dkg_public_shares.contains_key(&ack.signer_id)
+                && ack.public_shares_digest != self.dkg_public_shares_digest
+            {
+                warn!(
+                    dkg_id = %ack.dkg_id,
+                    signer_id = %ack.signer_id,
+                    "DkgPublicSharesDoneAck public_shares_digest does not match the accepted public shares"
+                );
+                self.dkg_public_shares_mismatched_signer_ids
+                    .insert(ack.signer_id);
+            }
             self.ids_to_await.remove(&ack.signer_id);
             debug!(
                 dkg_id = %ack.dkg_id,
@@ -414,6 +463,16 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
             );
         }
         if self.ids_to_await.is_empty() {
+            if !self.dkg_public_shares_mismatched_signer_ids.is_empty() {
+                let mut signer_ids: Vec<u32> = self
+                    .dkg_public_shares_mismatched_signer_ids
+                    .iter()
+                    .copied()
+                    .collect();
+                signer_ids.sort_unstable();
+                self.move_to(State::Idle)?;
+                return Err(Error::DkgPublicSharesMismatch(signer_ids));
+            }
             self.move_to(State::DkgPrivateDistribute)?;
         }
         Ok(())
@@ -464,6 +523,9 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
     pub fn send_private_shares_done(&mut self) -> Result<Packet, Error> {
         let signer_ids: Vec<u32> = self.dkg_private_shares.keys().cloned().collect();
         self.ids_to_await = signer_ids.iter().cloned().collect();
+        // As for public shares, the accepted set is fixed from here on.
+        self.dkg_private_shares_digest =
+            dkg_private_shares_digest(self.current_dkg_id, &self.dkg_private_shares);
         info!(dkg_id = %self.current_dkg_id, "Sending DkgPrivateSharesDone");
         let msg = DkgPrivateSharesDone {
             dkg_id: self.current_dkg_id,
@@ -488,6 +550,17 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
                 warn!(signer_id = %ack.signer_id, "No public key in config");
                 return Ok(());
             }
+            if self.dkg_private_shares.contains_key(&ack.signer_id)
+                && ack.private_shares_digest != self.dkg_private_shares_digest
+            {
+                warn!(
+                    dkg_id = %ack.dkg_id,
+                    signer_id = %ack.signer_id,
+                    "DkgPrivateSharesDoneAck private_shares_digest does not match the accepted private shares"
+                );
+                self.dkg_private_shares_mismatched_signer_ids
+                    .insert(ack.signer_id);
+            }
             self.ids_to_await.remove(&ack.signer_id);
             debug!(
                 dkg_id = %ack.dkg_id,
@@ -496,6 +569,16 @@ impl<Aggregator: AggregatorTrait> Coordinator<Aggregator> {
             );
         }
         if self.ids_to_await.is_empty() {
+            if !self.dkg_private_shares_mismatched_signer_ids.is_empty() {
+                let mut signer_ids: Vec<u32> = self
+                    .dkg_private_shares_mismatched_signer_ids
+                    .iter()
+                    .copied()
+                    .collect();
+                signer_ids.sort_unstable();
+                self.move_to(State::Idle)?;
+                return Err(Error::DkgPrivateSharesMismatch(signer_ids));
+            }
             self.move_to(State::DkgEndDistribute)?;
         }
         Ok(())
@@ -1005,7 +1088,11 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
             current_sign_id: 0,
             current_sign_iter_id: 0,
             dkg_public_shares: Default::default(),
+            dkg_public_shares_mismatched_signer_ids: Default::default(),
+            dkg_public_shares_digest: Default::default(),
             dkg_private_shares: Default::default(),
+            dkg_private_shares_digest: Default::default(),
+            dkg_private_shares_mismatched_signer_ids: Default::default(),
             dkg_end_messages: Default::default(),
             party_polynomials: Default::default(),
             public_nonces: Default::default(),
@@ -1028,7 +1115,15 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
             current_sign_id: state.current_sign_id,
             current_sign_iter_id: state.current_sign_iter_id,
             dkg_public_shares: state.dkg_public_shares.clone(),
+            dkg_public_shares_mismatched_signer_ids: state
+                .dkg_public_shares_mismatched_signer_ids
+                .clone(),
+            dkg_public_shares_digest: state.dkg_public_shares_digest,
             dkg_private_shares: state.dkg_private_shares.clone(),
+            dkg_private_shares_digest: state.dkg_private_shares_digest,
+            dkg_private_shares_mismatched_signer_ids: state
+                .dkg_private_shares_mismatched_signer_ids
+                .clone(),
             dkg_end_messages: state.dkg_end_messages.clone(),
             party_polynomials: state.party_polynomials.clone(),
             public_nonces: state.message_nonces[&Vec::new()].public_nonces.clone(),
@@ -1060,7 +1155,15 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
             current_sign_id: self.current_sign_id,
             current_sign_iter_id: self.current_sign_iter_id,
             dkg_public_shares: self.dkg_public_shares.clone(),
+            dkg_public_shares_mismatched_signer_ids: self
+                .dkg_public_shares_mismatched_signer_ids
+                .clone(),
+            dkg_public_shares_digest: self.dkg_public_shares_digest,
             dkg_private_shares: self.dkg_private_shares.clone(),
+            dkg_private_shares_digest: self.dkg_private_shares_digest,
+            dkg_private_shares_mismatched_signer_ids: self
+                .dkg_private_shares_mismatched_signer_ids
+                .clone(),
             dkg_end_messages: self.dkg_end_messages.clone(),
             party_polynomials: self.party_polynomials.clone(),
             message_nonces,
@@ -1183,6 +1286,10 @@ impl<Aggregator: AggregatorTrait> CoordinatorTrait for Coordinator<Aggregator> {
     fn reset(&mut self) {
         self.state = State::Idle;
         self.dkg_public_shares.clear();
+        self.dkg_public_shares_mismatched_signer_ids.clear();
+        self.dkg_public_shares_digest = Default::default();
+        self.dkg_private_shares_digest = Default::default();
+        self.dkg_private_shares_mismatched_signer_ids.clear();
         self.party_polynomials.clear();
         self.public_nonces.clear();
         self.signature_shares.clear();
@@ -1374,9 +1481,10 @@ pub mod test {
                 test::{
                     bad_signature_share_request, btc_sign_verify, check_signature_shares,
                     coordinator_state_machine, empty_private_shares, empty_public_shares,
-                    equal_after_save_load, feedback_messages, feedback_mutated_messages,
-                    invalid_nonce, new_coordinator, run_dkg, run_dkg_sign, setup, start_dkg_round,
-                    start_signing_round, verify_packet_sigs,
+                    end_begin_digest_mismatch, equal_after_save_load, equivocating_private_shares,
+                    equivocating_public_shares, feedback_messages, feedback_mutated_messages,
+                    invalid_nonce, new_coordinator, private_begin_digest_mismatch, run_dkg,
+                    run_dkg_sign, setup, start_dkg_round, start_signing_round, verify_packet_sigs,
                 },
                 Config, Coordinator as CoordinatorTrait, State,
             },
@@ -2127,5 +2235,49 @@ pub mod test {
     #[test]
     fn btc_sign_verify_v2() {
         btc_sign_verify::<FrostCoordinator<v2::Aggregator>, v2::Signer>(5, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn equivocating_public_shares_v1() {
+        equivocating_public_shares::<FrostCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn equivocating_public_shares_v2() {
+        equivocating_public_shares::<FrostCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn private_begin_digest_mismatch_v1() {
+        private_begin_digest_mismatch::<FrostCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn private_begin_digest_mismatch_v2() {
+        private_begin_digest_mismatch::<FrostCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn equivocating_private_shares_v1() {
+        equivocating_private_shares::<FrostCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn equivocating_private_shares_v2() {
+        equivocating_private_shares::<FrostCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
+    }
+
+    #[test]
+    #[cfg(feature = "with_v1")]
+    fn end_begin_digest_mismatch_v1() {
+        end_begin_digest_mismatch::<FrostCoordinator<v1::Aggregator>, v1::Signer>(4, 2);
+    }
+
+    #[test]
+    fn end_begin_digest_mismatch_v2() {
+        end_begin_digest_mismatch::<FrostCoordinator<v2::Aggregator>, v2::Signer>(4, 2);
     }
 }

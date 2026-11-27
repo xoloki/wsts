@@ -45,6 +45,22 @@ pub enum DkgError {
     /// DKG end timeout
     #[error("DKG end timeout, waiting for {0:?}")]
     DkgEndTimeout(Vec<u32>),
+    /// Signers acknowledged a different set of DKG public shares than the coordinator accepted.
+    /// The listed signers' views disagree with the coordinator's; this does not by itself identify
+    /// which participant equivocated.
+    ///
+    /// The shape of the list is still diagnostic.  If every acknowledging signer is listed, the
+    /// coordinator's own view is the odd one out: a signer sent its shares differently to the
+    /// coordinator alone, or the coordinator's state is wrong.  If only some are listed, a signer
+    /// sent different shares to those signers.
+    #[error("DKG public shares digest mismatch from signers {0:?}")]
+    DkgPublicSharesMismatch(Vec<u32>),
+    /// Signers acknowledged a different set of DKG private shares than the coordinator accepted.
+    /// As with public shares, the listed signers' views disagree with the coordinator's; this does
+    /// not by itself identify which participant equivocated, and the shape of the list is
+    /// diagnostic in the same way as for [`DkgError::DkgPublicSharesMismatch`].
+    #[error("DKG private shares digest mismatch from signers {0:?}")]
+    DkgPrivateSharesMismatch(Vec<u32>),
     /// DKG end failure
     #[error("DKG end failure")]
     DkgEndFailure {

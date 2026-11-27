@@ -19,10 +19,11 @@ use crate::{
     },
     errors::{DkgError, EncryptionError},
     net::{
-        BadPrivateShare, DkgBegin, DkgEnd, DkgEndBegin, DkgFailure, DkgPrivateBegin,
-        DkgPrivateShares, DkgPrivateSharesDone, DkgPrivateSharesDoneAck, DkgPublicShares,
-        DkgPublicSharesDone, DkgPublicSharesDoneAck, DkgStatus, Message, NonceRequest,
-        NonceResponse, Packet, SignatureShareRequest, SignatureShareResponse, SignatureType,
+        dkg_private_shares_digest, dkg_public_shares_digest, BadPrivateShare, DkgBegin, DkgEnd,
+        DkgEndBegin, DkgFailure, DkgPrivateBegin, DkgPrivateShares, DkgPrivateSharesDone,
+        DkgPrivateSharesDoneAck, DkgPublicShares, DkgPublicSharesDone, DkgPublicSharesDoneAck,
+        DkgStatus, Message, NonceRequest, NonceResponse, Packet, SignatureShareRequest,
+        SignatureShareResponse, SignatureType,
     },
     state_machine::{PublicKeys, StateMachine},
     traits::{Signer as SignerTrait, SignerState as SignerSavedState},
@@ -583,6 +584,22 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             }));
         };
 
+        // Refuse to compute key shares unless the coordinator accepted the same private shares we
+        // did.  An honest coordinator aborts before this point on any mismatch, so a mismatch here
+        // means the coordinator is faulty or equivocating; report it rather than completing DKG.
+        if dkg_end_begin.private_shares_digest != self.private_shares_digest() {
+            warn!(
+                signer_id = %self.signer_id,
+                dkg_id = %self.dkg_id,
+                "DkgEndBegin private_shares_digest does not match our accepted private shares, not completing DKG"
+            );
+            return Ok(Message::DkgEnd(DkgEnd {
+                dkg_id: self.dkg_id,
+                signer_id: self.signer_id,
+                status: DkgStatus::Failure(DkgFailure::PrivateSharesDigestMismatch),
+            }));
+        }
+
         // fist check to see if dkg_threshold has been met
         let signer_ids_set: HashSet<u32> = dkg_end_begin
             .signer_ids
@@ -951,6 +968,16 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
         self.dkg_public_begin(rng)
     }
 
+    /// Digest of the public shares this signer has accepted for the current DKG round
+    fn public_shares_digest(&self) -> [u8; 32] {
+        dkg_public_shares_digest(self.dkg_id, &self.dkg_public_shares)
+    }
+
+    /// Digest of the private shares this signer has accepted for the current DKG round
+    fn private_shares_digest(&self) -> [u8; 32] {
+        dkg_private_shares_digest(self.dkg_id, &self.dkg_private_shares)
+    }
+
     fn dkg_public_shares_done(&mut self, msg: &DkgPublicSharesDone) -> Result<Vec<Message>, Error> {
         if msg.dkg_id != self.dkg_id {
             warn!(
@@ -996,6 +1023,7 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             let ack = DkgPublicSharesDoneAck {
                 dkg_id: self.dkg_id,
                 signer_id: self.signer_id,
+                public_shares_digest: self.public_shares_digest(),
             };
             self.move_to(State::DkgPublicSharesDoneAck)?;
             Ok(vec![Message::DkgPublicSharesDoneAck(ack)])
@@ -1057,6 +1085,7 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
             let ack = DkgPrivateSharesDoneAck {
                 dkg_id: self.dkg_id,
                 signer_id: self.signer_id,
+                private_shares_digest: self.private_shares_digest(),
             };
             self.move_to(State::DkgPrivateSharesDoneAck)?;
             Ok(vec![Message::DkgPrivateSharesDoneAck(ack)])
@@ -1123,6 +1152,19 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
                 expected = %self.dkg_id,
                 "DkgPrivateBegin dkg_id mismatch"
             );
+            return Ok(vec![]);
+        }
+        // Refuse to send private shares unless the coordinator accepted the same public shares we
+        // did.  An honest coordinator aborts before this point on any mismatch, so a mismatch here
+        // means the coordinator is faulty or equivocating; sending nothing is the safe response.
+        let public_shares_digest = self.public_shares_digest();
+        if dkg_private_begin.public_shares_digest != public_shares_digest {
+            warn!(
+                signer_id = %self.signer_id,
+                dkg_id = %self.dkg_id,
+                "DkgPrivateBegin public_shares_digest does not match our accepted public shares, not sending private shares"
+            );
+            self.move_to(State::Idle)?;
             return Ok(vec![]);
         }
         let mut msgs = vec![];
@@ -1324,6 +1366,7 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
                 let ack = DkgPublicSharesDoneAck {
                     dkg_id: self.dkg_id,
                     signer_id: self.signer_id,
+                    public_shares_digest: self.public_shares_digest(),
                 };
                 self.move_to(State::DkgPublicSharesDoneAck)?;
                 return Ok(vec![Message::DkgPublicSharesDoneAck(ack)]);
@@ -1442,6 +1485,7 @@ impl<SignerType: SignerTrait> Signer<SignerType> {
                 let ack = DkgPrivateSharesDoneAck {
                     dkg_id: self.dkg_id,
                     signer_id: self.signer_id,
+                    private_shares_digest: self.private_shares_digest(),
                 };
                 self.move_to(State::DkgPrivateSharesDoneAck)?;
                 return Ok(vec![Message::DkgPrivateSharesDoneAck(ack)]);
@@ -1997,6 +2041,7 @@ pub mod test {
             dkg_id: 1,
             signer_ids: vec![0],
             key_ids: vec![],
+            public_shares_digest: dkg_public_shares_digest(1, &signer.dkg_public_shares),
         });
         let dkg_private_begin_packet = Packet {
             msg: dkg_private_begin,
@@ -2028,6 +2073,7 @@ pub mod test {
             dkg_id: 1,
             signer_ids: vec![0],
             key_ids: vec![],
+            private_shares_digest: dkg_private_shares_digest(1, &signer.dkg_private_shares),
         };
         let _ = signer
             .dkg_end_begin(&dkg_end_begin)

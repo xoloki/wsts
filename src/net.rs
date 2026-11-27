@@ -1,5 +1,5 @@
 use rand_core::{CryptoRng, RngCore};
-use std::fmt::Debug;
+use std::{collections::BTreeMap, fmt::Debug};
 
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,11 @@ pub enum DkgFailure {
     MissingPrivateShares(HashSet<u32>),
     /// DKG private shares were bad from these signer_ids
     BadPrivateShares(HashMap<u32, BadPrivateShare>),
+    /// The coordinator's `DkgEndBegin` echoed a private shares digest that differs from the
+    /// private shares this signer accepted, so the signer refused to complete DKG.  An honest
+    /// coordinator aborts on any mismatch before sending `DkgEndBegin`, so this indicates a faulty
+    /// or equivocating coordinator rather than a faulty signer.
+    PrivateSharesDigestMismatch,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -246,6 +251,49 @@ impl Signable for DkgPublicShares {
     }
 }
 
+/// Domain separation tag for [`dkg_public_shares_digest`]
+const DKG_PUBLIC_SHARES_DIGEST_TAG: &[u8] = b"WSTS/DKG_PUBLIC_SHARES_DIGEST";
+
+/// Compute a digest over an accepted set of DKG public shares, keyed by signer ID.
+///
+/// Signers and the coordinator compare this value before any private shares are sent, so that a
+/// signer who sent different public shares to different participants is caught before the round
+/// can produce a group key that honest participants disagree about.  It covers every field of each
+/// [`DkgPublicShares`], including the schnorr ID proofs and the key exchange public key and proof,
+/// since private shares are encrypted to the latter.  Lists are length-prefixed so that the
+/// encoding is unambiguous.  Signers are visited in ascending signer ID order.
+pub fn dkg_public_shares_digest(
+    dkg_id: u64,
+    dkg_public_shares: &BTreeMap<u32, DkgPublicShares>,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+
+    hasher.update(DKG_PUBLIC_SHARES_DIGEST_TAG);
+    hasher.update(dkg_id.to_be_bytes());
+    hasher.update((dkg_public_shares.len() as u64).to_be_bytes());
+    for (signer_id, shares) in dkg_public_shares {
+        hasher.update(signer_id.to_be_bytes());
+        hasher.update(shares.dkg_id.to_be_bytes());
+        hasher.update(shares.signer_id.to_be_bytes());
+        hasher.update(shares.kex_public_key.compress().as_bytes());
+        hasher.update(shares.kex_proof.R.compress().as_bytes());
+        hasher.update(shares.kex_proof.s.to_bytes());
+        hasher.update((shares.comms.len() as u64).to_be_bytes());
+        for (party_id, comm) in &shares.comms {
+            hasher.update(party_id.to_be_bytes());
+            hasher.update(comm.id.id.to_bytes());
+            hasher.update(comm.id.proof.R.compress().as_bytes());
+            hasher.update(comm.id.proof.s.to_bytes());
+            hasher.update((comm.poly.len() as u64).to_be_bytes());
+            for a in &comm.poly {
+                hasher.update(a.compress().as_bytes());
+            }
+        }
+    }
+
+    hasher.finalize().into()
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 /// DKG public shares done message from coordinator to signers
 pub struct DkgPublicSharesDone {
@@ -272,6 +320,8 @@ pub struct DkgPublicSharesDoneAck {
     pub dkg_id: u64,
     /// Signer ID
     pub signer_id: u32,
+    /// [`dkg_public_shares_digest`] of the public shares this signer accepted
+    pub public_shares_digest: [u8; 32],
 }
 
 impl Signable for DkgPublicSharesDoneAck {
@@ -279,6 +329,7 @@ impl Signable for DkgPublicSharesDoneAck {
         hasher.update("DKG_PUBLIC_SHARES_DONE_ACK".as_bytes());
         hasher.update(self.dkg_id.to_be_bytes());
         hasher.update(self.signer_id.to_be_bytes());
+        hasher.update(self.public_shares_digest);
     }
 }
 
@@ -291,6 +342,9 @@ pub struct DkgPrivateBegin {
     pub signer_ids: Vec<u32>,
     /// Key IDs who responded in time for this DKG round
     pub key_ids: Vec<u32>,
+    /// [`dkg_public_shares_digest`] of the public shares the coordinator accepted, echoed so that
+    /// signers need not trust the coordinator to have compared it against every ack
+    pub public_shares_digest: [u8; 32],
 }
 
 impl Signable for DkgPrivateBegin {
@@ -303,6 +357,7 @@ impl Signable for DkgPrivateBegin {
         for signer_id in &self.signer_ids {
             hasher.update(signer_id.to_be_bytes());
         }
+        hasher.update(self.public_shares_digest);
     }
 }
 
@@ -335,6 +390,50 @@ impl Signable for DkgPrivateShares {
     }
 }
 
+/// Domain separation tag for [`dkg_private_shares_digest`]
+const DKG_PRIVATE_SHARES_DIGEST_TAG: &[u8] = b"WSTS/DKG_PRIVATE_SHARES_DIGEST";
+
+/// Compute a digest over a received set of DKG private shares, keyed by signer ID.
+///
+/// The private-shares counterpart of [`dkg_public_shares_digest`], compared by signers and the
+/// coordinator before DKG ends, so that a signer who sent different private shares to different
+/// participants (for instance a bad share to one and a good share to another, under the same key
+/// exchange key) is caught before any honest signer computes its key shares.  Every
+/// [`DkgPrivateShares`] is broadcast with all of its ciphertexts, so every participant digests the
+/// same bytes.  It covers every ciphertext, with destination key IDs sorted because they are held
+/// in a `HashMap`, and every list and ciphertext is length-prefixed so that the encoding is
+/// unambiguous.  Signers are visited in ascending signer ID order.
+pub fn dkg_private_shares_digest(
+    dkg_id: u64,
+    dkg_private_shares: &BTreeMap<u32, DkgPrivateShares>,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+
+    hasher.update(DKG_PRIVATE_SHARES_DIGEST_TAG);
+    hasher.update(dkg_id.to_be_bytes());
+    hasher.update((dkg_private_shares.len() as u64).to_be_bytes());
+    for (signer_id, shares) in dkg_private_shares {
+        hasher.update(signer_id.to_be_bytes());
+        hasher.update(shares.dkg_id.to_be_bytes());
+        hasher.update(shares.signer_id.to_be_bytes());
+        hasher.update((shares.shares.len() as u64).to_be_bytes());
+        for (src_party_id, encrypted_shares) in &shares.shares {
+            hasher.update(src_party_id.to_be_bytes());
+            hasher.update((encrypted_shares.len() as u64).to_be_bytes());
+            let mut dst_key_ids: Vec<u32> = encrypted_shares.keys().copied().collect();
+            dst_key_ids.sort_unstable();
+            for dst_key_id in &dst_key_ids {
+                let bytes = &encrypted_shares[dst_key_id];
+                hasher.update(dst_key_id.to_be_bytes());
+                hasher.update((bytes.len() as u64).to_be_bytes());
+                hasher.update(bytes);
+            }
+        }
+    }
+
+    hasher.finalize().into()
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 /// DKG private shares done message from coordinator to signers
 pub struct DkgPrivateSharesDone {
@@ -361,6 +460,8 @@ pub struct DkgPrivateSharesDoneAck {
     pub dkg_id: u64,
     /// Signer ID
     pub signer_id: u32,
+    /// [`dkg_private_shares_digest`] of the private shares this signer accepted
+    pub private_shares_digest: [u8; 32],
 }
 
 impl Signable for DkgPrivateSharesDoneAck {
@@ -368,6 +469,7 @@ impl Signable for DkgPrivateSharesDoneAck {
         hasher.update("DKG_PRIVATE_SHARES_DONE_ACK".as_bytes());
         hasher.update(self.dkg_id.to_be_bytes());
         hasher.update(self.signer_id.to_be_bytes());
+        hasher.update(self.private_shares_digest);
     }
 }
 
@@ -380,6 +482,9 @@ pub struct DkgEndBegin {
     pub signer_ids: Vec<u32>,
     /// Key IDs who responded in time for this DKG round
     pub key_ids: Vec<u32>,
+    /// [`dkg_private_shares_digest`] of the private shares the coordinator accepted, echoed so
+    /// that signers need not trust the coordinator to have compared it against every ack
+    pub private_shares_digest: [u8; 32],
 }
 
 impl Signable for DkgEndBegin {
@@ -392,6 +497,7 @@ impl Signable for DkgEndBegin {
         for signer_id in &self.signer_ids {
             hasher.update(signer_id.to_be_bytes());
         }
+        hasher.update(self.private_shares_digest);
     }
 }
 
@@ -864,6 +970,7 @@ mod test {
             dkg_id: 0,
             key_ids: Default::default(),
             signer_ids: Default::default(),
+            public_shares_digest: Default::default(),
         };
         let msg = Message::DkgBegin(dkg_begin.clone());
         let coordinator_packet_dkg_begin = Packet {
@@ -1186,5 +1293,299 @@ mod test {
             .sign(&test_config.coordinator_private_key)
             .expect("Failed to sign");
         assert!(msg.verify(&sig, &test_config.coordinator_public_key));
+    }
+
+    fn digest_test_shares<RNG: RngCore + CryptoRng>(
+        signer_id: u32,
+        rng: &mut RNG,
+    ) -> DkgPublicShares {
+        let ctx = 0u64.to_be_bytes();
+        let comms = (0..2u32)
+            .map(|i| {
+                let party_id = signer_id * 2 + i;
+                (
+                    party_id,
+                    PolyCommitment {
+                        id: ID::new(&Scalar::from(party_id), &Scalar::random(rng), &ctx, rng),
+                        poly: vec![Point::from(Scalar::random(rng)); 2],
+                    },
+                )
+            })
+            .collect();
+        DkgPublicShares {
+            dkg_id: 7,
+            signer_id,
+            comms,
+            kex_public_key: Point::from(Scalar::random(rng)),
+            kex_proof: schnorr::Proof {
+                R: Point::from(Scalar::random(rng)),
+                s: Scalar::random(rng),
+            },
+        }
+    }
+
+    #[test]
+    fn dkg_public_shares_digest_covers_every_field() {
+        let mut rng = create_rng();
+        let shares: BTreeMap<u32, DkgPublicShares> = (0..2u32)
+            .map(|signer_id| (signer_id, digest_test_shares(signer_id, &mut rng)))
+            .collect();
+        let digest = dkg_public_shares_digest(7, &shares);
+        assert_eq!(digest, dkg_public_shares_digest(7, &shares.clone()));
+
+        let other_point = Point::from(Scalar::random(&mut rng));
+        let other_scalar = Scalar::random(&mut rng);
+        type Mutation = Box<dyn Fn(&mut BTreeMap<u32, DkgPublicShares>)>;
+        let mutations: Vec<(&str, Mutation)> = vec![
+            (
+                "drop a signer",
+                Box::new(|m| {
+                    m.remove(&1);
+                }),
+            ),
+            (
+                "shares dkg_id",
+                Box::new(|m| m.get_mut(&1).unwrap().dkg_id += 1),
+            ),
+            (
+                "shares signer_id",
+                Box::new(|m| m.get_mut(&1).unwrap().signer_id += 1),
+            ),
+            (
+                "kex_public_key",
+                Box::new(move |m| m.get_mut(&1).unwrap().kex_public_key = other_point),
+            ),
+            (
+                "kex_proof R",
+                Box::new(move |m| m.get_mut(&1).unwrap().kex_proof.R = other_point),
+            ),
+            (
+                "kex_proof s",
+                Box::new(move |m| m.get_mut(&1).unwrap().kex_proof.s = other_scalar),
+            ),
+            (
+                "party_id",
+                Box::new(|m| m.get_mut(&1).unwrap().comms[1].0 += 10),
+            ),
+            (
+                "ID id",
+                Box::new(move |m| m.get_mut(&1).unwrap().comms[1].1.id.id = other_scalar),
+            ),
+            (
+                "ID proof R",
+                Box::new(move |m| m.get_mut(&1).unwrap().comms[1].1.id.proof.R = other_point),
+            ),
+            (
+                "ID proof s",
+                Box::new(move |m| m.get_mut(&1).unwrap().comms[1].1.id.proof.s = other_scalar),
+            ),
+            (
+                "poly point",
+                Box::new(move |m| m.get_mut(&1).unwrap().comms[1].1.poly[1] = other_point),
+            ),
+            (
+                "poly length",
+                Box::new(|m| {
+                    m.get_mut(&1).unwrap().comms[1].1.poly.pop();
+                }),
+            ),
+            (
+                "comms length",
+                Box::new(|m| {
+                    m.get_mut(&1).unwrap().comms.pop();
+                }),
+            ),
+        ];
+        for (name, mutate) in mutations {
+            let mut mutated = shares.clone();
+            mutate(&mut mutated);
+            assert_ne!(
+                digest,
+                dkg_public_shares_digest(7, &mutated),
+                "digest does not cover {name}"
+            );
+        }
+        assert_ne!(
+            digest,
+            dkg_public_shares_digest(8, &shares),
+            "digest does not cover dkg_id"
+        );
+    }
+
+    #[test]
+    fn public_shares_digest_is_signed() {
+        let test_config = TestConfig::default();
+        let public_key = &test_config.coordinator_public_key;
+
+        let ack = DkgPublicSharesDoneAck {
+            dkg_id: 0,
+            signer_id: 0,
+            public_shares_digest: [1u8; 32],
+        };
+        let sig = ack.sign(&test_config.coordinator_private_key).unwrap();
+        assert!(ack.verify(&sig, public_key));
+        let mut tampered = ack.clone();
+        tampered.public_shares_digest[0] ^= 1;
+        assert!(!tampered.verify(&sig, public_key));
+
+        let begin = DkgPrivateBegin {
+            dkg_id: 0,
+            signer_ids: vec![0],
+            key_ids: vec![1],
+            public_shares_digest: [1u8; 32],
+        };
+        let sig = begin.sign(&test_config.coordinator_private_key).unwrap();
+        assert!(begin.verify(&sig, public_key));
+        let mut tampered = begin.clone();
+        tampered.public_shares_digest[0] ^= 1;
+        assert!(!tampered.verify(&sig, public_key));
+    }
+
+    fn digest_test_private_shares<RNG: RngCore + CryptoRng>(
+        signer_id: u32,
+        rng: &mut RNG,
+    ) -> DkgPrivateShares {
+        let shares = (0..2u32)
+            .map(|i| {
+                let encrypted: HashMap<u32, Vec<u8>> = (1..=6u32)
+                    .map(|key_id| {
+                        let mut bytes = vec![0u8; 60];
+                        rng.fill_bytes(&mut bytes);
+                        (key_id, bytes)
+                    })
+                    .collect();
+                (signer_id * 2 + i, encrypted)
+            })
+            .collect();
+        DkgPrivateShares {
+            dkg_id: 7,
+            signer_id,
+            shares,
+        }
+    }
+
+    #[test]
+    fn dkg_private_shares_digest_covers_every_field() {
+        let mut rng = create_rng();
+        let shares: BTreeMap<u32, DkgPrivateShares> = (0..2u32)
+            .map(|signer_id| (signer_id, digest_test_private_shares(signer_id, &mut rng)))
+            .collect();
+        let digest = dkg_private_shares_digest(7, &shares);
+        assert_eq!(digest, dkg_private_shares_digest(7, &shares.clone()));
+
+        // The ciphertexts live in a HashMap, so the digest must not depend on its iteration
+        // order: rebuild every map with a different capacity and the reverse insertion order.
+        let mut reordered = shares.clone();
+        for msg in reordered.values_mut() {
+            for (_, encrypted) in msg.shares.iter_mut() {
+                let mut entries: Vec<(u32, Vec<u8>)> = encrypted.drain().collect();
+                entries.sort_unstable_by_key(|(key_id, _)| core::cmp::Reverse(*key_id));
+                let mut rebuilt = HashMap::with_capacity(64);
+                for (key_id, bytes) in entries {
+                    rebuilt.insert(key_id, bytes);
+                }
+                *encrypted = rebuilt;
+            }
+        }
+        assert_eq!(digest, dkg_private_shares_digest(7, &reordered));
+
+        type Mutation = Box<dyn Fn(&mut BTreeMap<u32, DkgPrivateShares>)>;
+        let mutations: Vec<(&str, Mutation)> = vec![
+            (
+                "drop a signer",
+                Box::new(|m| {
+                    m.remove(&1);
+                }),
+            ),
+            (
+                "shares dkg_id",
+                Box::new(|m| m.get_mut(&1).unwrap().dkg_id += 1),
+            ),
+            (
+                "shares signer_id",
+                Box::new(|m| m.get_mut(&1).unwrap().signer_id += 1),
+            ),
+            (
+                "src party_id",
+                Box::new(|m| m.get_mut(&1).unwrap().shares[1].0 += 10),
+            ),
+            (
+                "dst key_id",
+                Box::new(|m| {
+                    let encrypted = &mut m.get_mut(&1).unwrap().shares[1].1;
+                    let bytes = encrypted.remove(&6).unwrap();
+                    encrypted.insert(60, bytes);
+                }),
+            ),
+            (
+                "ciphertext byte",
+                Box::new(|m| m.get_mut(&1).unwrap().shares[1].1.get_mut(&3).unwrap()[5] ^= 1),
+            ),
+            (
+                "ciphertext length",
+                Box::new(|m| {
+                    m.get_mut(&1).unwrap().shares[1]
+                        .1
+                        .get_mut(&3)
+                        .unwrap()
+                        .pop();
+                }),
+            ),
+            (
+                "number of keys",
+                Box::new(|m| {
+                    m.get_mut(&1).unwrap().shares[1].1.remove(&6);
+                }),
+            ),
+            (
+                "number of parties",
+                Box::new(|m| {
+                    m.get_mut(&1).unwrap().shares.pop();
+                }),
+            ),
+        ];
+        for (name, mutate) in mutations {
+            let mut mutated = shares.clone();
+            mutate(&mut mutated);
+            assert_ne!(
+                digest,
+                dkg_private_shares_digest(7, &mutated),
+                "digest does not cover {name}"
+            );
+        }
+        assert_ne!(
+            digest,
+            dkg_private_shares_digest(8, &shares),
+            "digest does not cover dkg_id"
+        );
+    }
+
+    #[test]
+    fn private_shares_digest_is_signed() {
+        let test_config = TestConfig::default();
+        let public_key = &test_config.coordinator_public_key;
+
+        let ack = DkgPrivateSharesDoneAck {
+            dkg_id: 0,
+            signer_id: 0,
+            private_shares_digest: [1u8; 32],
+        };
+        let sig = ack.sign(&test_config.coordinator_private_key).unwrap();
+        assert!(ack.verify(&sig, public_key));
+        let mut tampered = ack.clone();
+        tampered.private_shares_digest[0] ^= 1;
+        assert!(!tampered.verify(&sig, public_key));
+
+        let begin = DkgEndBegin {
+            dkg_id: 0,
+            signer_ids: vec![0],
+            key_ids: vec![1],
+            private_shares_digest: [1u8; 32],
+        };
+        let sig = begin.sign(&test_config.coordinator_private_key).unwrap();
+        assert!(begin.verify(&sig, public_key));
+        let mut tampered = begin.clone();
+        tampered.private_shares_digest[0] ^= 1;
+        assert!(!tampered.verify(&sig, public_key));
     }
 }
