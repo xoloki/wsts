@@ -854,10 +854,16 @@ pub mod test {
     /// The mutator also re-proves the kex over the modified commitments. Without that the
     /// signers reject on `kex_verify` and the test exercises packet validation instead of the
     /// path under test.
+    /// Returns whether a signature actually completed. That is `false` on today's `main`:
+    /// the deliverable here is the panic reproduction, and the signing half cannot complete
+    /// until #249/#250 fix the restored coordinator's per-round state. Returned rather than
+    /// asserted so that work has a line to change instead of a comment to find, and not
+    /// asserted as `false` because that would pin behaviour those issues are about to correct.
+    #[must_use]
     pub fn held_key_survives_a_malformed_rekey<
         Coordinator: CoordinatorTrait,
         SignerType: SignerTrait,
-    >() {
+    >() -> bool {
         let fixture = held_key_fixture::<Coordinator, SignerType>(4, 2, HeldKey::RestoredWithKey);
         let mut coordinators = fixture.coordinators;
         let mut signers = fixture.signers;
@@ -920,8 +926,9 @@ pub mod test {
             .map(|s| Signer::<SignerType>::load(s))
             .collect();
 
-        // The key is unchanged by the failed round, so signing under it must work rather than
-        // indexing a malformed commitment.
+        // The key is unchanged by the failed round. What is asserted below is that asking to
+        // sign under it does not panic by indexing a malformed commitment; whether a signature
+        // completes is a separate question, answered by the returned bool.
         assert_eq!(
             coordinators[0].get_aggregate_public_key(),
             Some(fixture.key),
@@ -950,7 +957,7 @@ pub mod test {
 
         match outcome {
             Err(_) => panic!("signing under the held key panicked after a failed re-keying"),
-            Ok(Ok(_signed)) => {}
+            Ok(Ok(signed)) => signed,
             Ok(Err(e)) => panic!("signing failed with {e:?} rather than panicking or signing"),
         }
     }
@@ -979,6 +986,12 @@ pub mod test {
     /// restores. A test that fails a re-keying round and then signs under the held key must
     /// reload the signers from these saves at that point, or the round stalls at nonce gathering
     /// and any "no panic" assertion passes without reaching the code it names.
+    ///
+    /// Reloading also **discards any key state a signer installed during the failed round**, so
+    /// a test built on this fixture is blind to signer-side key divergence: the case where a
+    /// round fails at the coordinator after some signers succeeded locally, and the signers move
+    /// to the new key while the coordinator keeps the old one. Covering that needs a fixture
+    /// that does not reload, or one that retains both keys.
     pub struct HeldKeyFixture<Coordinator: CoordinatorTrait, SignerType: SignerTrait> {
         /// coordinators holding the key
         pub coordinators: Vec<Coordinator>,
