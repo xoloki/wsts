@@ -76,6 +76,9 @@ pub enum Error {
     /// Signers acknowledged a different set of DKG public shares than the coordinator accepted
     #[error("DKG public shares digest mismatch from signers {0:?}")]
     DkgPublicSharesMismatch(Vec<u32>),
+    #[error("DKG public shares from signer {0} were refused as invalid")]
+    /// A signer's DKG public shares failed verification and were refused at receipt
+    DkgPublicSharesInvalid(u32),
     /// Signers acknowledged a different set of DKG private shares than the coordinator accepted
     #[error("DKG private shares digest mismatch from signers {0:?}")]
     DkgPrivateSharesMismatch(Vec<u32>),

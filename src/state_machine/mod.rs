@@ -61,6 +61,16 @@ pub enum DkgError {
     /// diagnostic in the same way as for [`DkgError::DkgPublicSharesMismatch`].
     #[error("DKG private shares digest mismatch from signers {0:?}")]
     DkgPrivateSharesMismatch(Vec<u32>),
+    /// The coordinator refused a signer's DKG public shares: a polynomial commitment failed
+    /// verification, either because its degree was wrong or because its proof of knowledge of
+    /// the constant term did not check out.
+    ///
+    /// This names the sender, not necessarily a malicious party: the same error covers a buggy
+    /// signer. It is reported rather than waited out because the FROST coordinator has no
+    /// timeouts, so a refused message would otherwise leave the round waiting on that signer
+    /// with only a log line to say why.
+    #[error("DKG public shares from signer {0} were refused as invalid")]
+    DkgPublicSharesInvalid(u32),
     /// DKG end failure
     #[error("DKG end failure")]
     DkgEndFailure {
